@@ -58,6 +58,26 @@ func (e *sshExecutor) CommandContext(ctx context.Context, cmd string, args ...st
 	return &sshCommand{sess, cmd, args, -1, nil, ctx}, nil
 }
 
+func (e *sshExecutor) PathExists(path string) (bool, error) {
+	cmd, err := e.Command("ls", path)
+	if err != nil {
+		return false, err
+	}
+
+	if err := cmd.Run(); err != nil {
+		if eerr, ok := err.(*ssh.ExitError); ok {
+			return eerr.ExitStatus() != 0, nil
+		}
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (e *sshExecutor) IsLocal() bool {
+	return false
+}
+
 type sshCommand struct {
 	sess *ssh.Session
 	cmd  string

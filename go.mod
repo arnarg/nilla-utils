@@ -1,13 +1,17 @@
 module github.com/arnarg/nilla-utils
 
-go 1.23.7
+go 1.24
+
+toolchain go1.24.2
 
 require (
 	github.com/charmbracelet/bubbles v0.20.0
 	github.com/charmbracelet/bubbletea v1.3.4
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/log v0.4.1
+	github.com/go-test/deep v1.1.1
 	github.com/kevinburke/ssh_config v1.2.0
+	github.com/s0rg/set v1.2.4
 	github.com/skeema/knownhosts v1.3.1
 	github.com/sourcegraph/conc v0.3.0
 	github.com/urfave/cli/v3 v3.1.1

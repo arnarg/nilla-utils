@@ -56,6 +56,19 @@ func ConvertBytesToUnit(b int64, unit string) float64 {
 	}
 }
 
+func DiffBytes(from, to int64) (float64, bool, string) {
+	diff := to - from
+
+	real := diff
+	if real < 0 {
+		real = -real
+	}
+
+	b, unit := ConvertBytes(real)
+
+	return b, diff < 0, unit
+}
+
 func GetUser() string {
 	if user, err := user.Current(); err == nil {
 		return user.Username

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/arnarg/nilla-utils/internal/diff"
 	"github.com/arnarg/nilla-utils/internal/exec"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/project"
@@ -307,18 +308,20 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	//
 	// Run generation diff using nvd
 	//
-	// TODO: support with --target
-	if cmd.String("target") == "" {
-		fmt.Fprintln(os.Stderr)
-		printSection("Comparing changes")
+	fmt.Fprintln(os.Stderr)
+	printSection("Comparing changes")
 
-		// Run nvd diff
-		diff, _ := builder.Command("nvd", "diff", CURRENT_PROFILE, string(out))
-		diff.SetStderr(os.Stderr)
-		diff.SetStdout(os.Stderr)
-		if err := diff.Run(); err != nil {
-			return err
-		}
+	if err := diff.Execute(
+		&diff.Generation{
+			Path:     CURRENT_PROFILE,
+			Executor: target,
+		},
+		&diff.Generation{
+			Path:     string(out),
+			Executor: builder,
+		},
+	); err != nil {
+		return err
 	}
 
 	// Build can exit now

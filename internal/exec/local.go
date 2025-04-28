@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"io"
+	"os"
 	"os/exec"
 )
 
@@ -18,6 +19,21 @@ func (e *localExecutor) Command(cmd string, args ...string) (Command, error) {
 
 func (e *localExecutor) CommandContext(ctx context.Context, cmd string, args ...string) (Command, error) {
 	return &localCommand{exec.CommandContext(ctx, cmd, args...)}, nil
+}
+
+func (e *localExecutor) PathExists(path string) (bool, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (e *localExecutor) IsLocal() bool {
+	return true
 }
 
 type localCommand struct {

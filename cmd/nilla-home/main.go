@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
+	gexec "os/exec"
 	"strings"
 
+	"github.com/arnarg/nilla-utils/internal/diff"
+	"github.com/arnarg/nilla-utils/internal/exec"
 	"github.com/arnarg/nilla-utils/internal/generation"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/project"
@@ -194,7 +196,7 @@ func inferNames(name string) ([]string, error) {
 func findHomeConfiguration(p string, names []string) (string, error) {
 	for _, name := range names {
 		code := fmt.Sprintf("x: x ? \"%s\"", name)
-		out, err := exec.Command(
+		out, err := gexec.Command(
 			"nix", "eval", "-f", p, "systems.home", "--apply", code,
 		).Output()
 		if err != nil {
@@ -249,6 +251,9 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 	log.Infof("Found system \"%s\"", name)
 
+	// Setup builder, which is always local
+	builder := exec.NewLocalExecutor()
+
 	//
 	// Home Manager configuration build
 	//
@@ -285,11 +290,16 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	fmt.Fprintln(os.Stderr)
 	printSection("Comparing changes")
 
-	// Run nvd diff
-	diff := exec.Command("nvd", "diff", current.Path(), string(out))
-	diff.Stderr = os.Stderr
-	diff.Stdout = os.Stderr
-	if err := diff.Run(); err != nil {
+	if err := diff.Execute(
+		&diff.Generation{
+			Path:     current.Path(),
+			Executor: builder,
+		},
+		&diff.Generation{
+			Path:     string(out),
+			Executor: builder,
+		},
+	); err != nil {
 		return err
 	}
 
@@ -320,7 +330,7 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 		// Run switch_to_configuration
 		switchp := fmt.Sprintf("%s/activate", out)
-		switchc := exec.Command(switchp)
+		switchc := gexec.Command(switchp)
 		switchc.Stderr = os.Stderr
 		switchc.Stdout = os.Stdout
 

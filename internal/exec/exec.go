@@ -8,6 +8,8 @@ import (
 type Executor interface {
 	Command(string, ...string) (Command, error)
 	CommandContext(context.Context, string, ...string) (Command, error)
+	PathExists(string) (bool, error)
+	IsLocal() bool
 }
 
 type Command interface {
