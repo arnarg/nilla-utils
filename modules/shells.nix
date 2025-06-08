@@ -14,7 +14,7 @@ in {
       default.value = "nixpkgs";
     };
     settings = let
-      builder = config.builders.${config.generators.packages.builder};
+      builder = config.builders.${config.generators.shells.builder};
     in
       lib.options.create {
         description = "Additional configuration to use when loading when loading the shells.";

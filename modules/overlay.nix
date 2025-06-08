@@ -17,20 +17,25 @@ in {
           type = lib.types.path;
           description = "The folder to auto discover packages.";
         };
+        options.args = lib.options.create {
+            description = "Additional arguments to pass to overlayied packages.";
+            type = lib.types.attrs.any;
+            default.value = {};
+          };
       }));
     };
   };
 
   config = {
     overlays = let
-      mkOverlayFromDir = dir: (f: p: (
+      mkOverlayFromDir = dir: args: (f: p: (
         mapAttrs
-        (_: d: f.callPackage d {})
+        (_: d: f.callPackage d args)
         (lib.utils.loadDirsWithFile "default.nix" dir)
       ));
     in
       mapAttrs
-      (_: opts: mkOverlayFromDir opts.folder)
+      (_: opts: mkOverlayFromDir opts.folder opts.args)
       config.generators.overlays;
   };
 }
