@@ -18,9 +18,9 @@ in {
           description = "The folder to auto discover packages.";
         };
         options.args = lib.options.create {
-            description = "Additional arguments to pass to overlayed packages.";
-            type = lib.types.attrs.any;
-            default.value = {};
+          description = "Additional arguments to pass to overlayed packages.";
+          type = lib.types.attrs.any;
+          default.value = {};
           };
       }));
     };
