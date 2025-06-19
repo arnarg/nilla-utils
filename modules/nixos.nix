@@ -1,6 +1,6 @@
 {config}: let
   inherit (config) inputs lib;
-  inherit (builtins) listToAttrs pathExists;
+  inherit (builtins) listToAttrs mapAttrs pathExists;
 
   globalModules = config.modules;
 
@@ -154,6 +154,14 @@ in {
         description = "Default modules to include in all hosts.";
       };
     };
+
+    generators.nixosModules = {
+      folder = lib.options.create {
+        type = lib.types.nullish lib.types.path;
+        description = "The folder to auto discover NixOS modules.";
+        default.value = null;
+      };
+    };
   };
 
   config = {
@@ -165,6 +173,13 @@ in {
             == null
             || (config.generators.nixos.folder != null && pathExists config.generators.nixos.folder);
           message = "NixOS generator's folder \"${config.generators.nixos.folder}\" does not exist.";
+        }
+        {
+          assertion =
+            config.generators.nixosModules.folder
+            == null
+            || (config.generators.nixosModules.folder != null && pathExists config.generators.nixosModules.folder);
+          message = "NixOS modules generator's folder \"${config.generators.nixosModules.folder}\" does not exist.";
         }
       ])
       ++ (lib.attrs.mapToList
@@ -197,5 +212,19 @@ in {
             ++ config.generators.nixos.modules;
         };
       }) (lib.utils.loadHostsFromDir config.generators.nixos.folder "configuration.nix")));
+
+    # Generate NixOS modules from `generators.nixosModules`
+    modules.nixos =
+      lib.modules.when
+      (config.generators.nixosModules.folder != null && pathExists config.generators.nixosModules.folder)
+      (
+        mapAttrs
+        (_name: import)
+        (
+          lib.utils.loadDirsWithFile
+          "default.nix"
+          config.generators.nixosModules.folder
+        )
+      );
   };
 }

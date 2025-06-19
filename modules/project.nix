@@ -26,7 +26,9 @@ in {
         shells.folder = "${folder}/shells";
         overlays.default.folder = "${folder}/packages";
         nixos.folder = "${folder}/hosts";
+        nixosModules.folder = "${folder}/modules/nixos";
         home.folder = "${folder}/hosts";
+        homeModules.folder = "${folder}/modules/home";
 
         # Since the project generators sets default
         # paths for all we do not want to fail assertions

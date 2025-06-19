@@ -1,6 +1,6 @@
 {config}: let
   inherit (config) inputs lib;
-  inherit (builtins) listToAttrs pathExists;
+  inherit (builtins) listToAttrs mapAttrs pathExists;
 
   globalModules = config.modules;
 in {
@@ -123,6 +123,14 @@ in {
         description = "Default modules to include in all hosts.";
       };
     };
+
+    generators.homeModules = {
+      folder = lib.options.create {
+        type = lib.types.nullish lib.types.path;
+        description = "The folder to auto discover home-manager modules.";
+        default.value = null;
+      };
+    };
   };
 
   config = {
@@ -134,6 +142,13 @@ in {
             == null
             || (config.generators.home.folder != null && pathExists config.generators.home.folder);
           message = "Home-Manager generator's folder \"${config.generators.home.folder}\" does not exist.";
+        }
+        {
+          assertion =
+            config.generators.homeModules.folder
+            == null
+            || (config.generators.homeModules.folder != null && pathExists config.generators.homeModules.folder);
+          message = "Home-Manager modules generator's folder \"${config.generators.homeModules.folder}\" does not exist.";
         }
       ])
       ++ (lib.attrs.mapToList
@@ -166,5 +181,19 @@ in {
             ++ config.generators.home.modules;
         };
       }) (config.lib.utils.loadHostsFromDir config.generators.home.folder "home.nix")));
+
+    # Generate home modules from `generators.homeModules`
+    modules.home =
+      lib.modules.when
+      (config.generators.homeModules.folder != null && pathExists config.generators.homeModules.folder)
+      (
+        mapAttrs
+        (_name: import)
+        (
+          lib.utils.loadDirsWithFile
+          "default.nix"
+          config.generators.homeModules.folder
+        )
+      );
   };
 }
