@@ -115,8 +115,12 @@ func (m buildModel) handleEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 
 		// error
 		if event.Level == 0 {
-			m.err = errors.New(event.Text)
-			return m, nil
+			// Lix does not have builtins.warn, this means warnings are logged at log level error
+			traceWarning := strings.HasPrefix(event.Text, "trace: ") && strings.Contains(event.Text, "warning:")
+			if !traceWarning {
+				m.err = errors.New(event.Text)
+				return m, nil
+			}
 		}
 
 		// Just display the message
