@@ -199,6 +199,7 @@ in {
           args =
             {
               inputs = config.inputs;
+              host = host.hostname;
             }
             // config.generators.nixos.args;
           modules =
