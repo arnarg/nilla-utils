@@ -57,7 +57,7 @@ type buildModel struct {
 
 	lastMsg string
 
-	err error
+	errs []error
 }
 
 func initBuildModel(verbose bool) buildModel {
@@ -74,11 +74,16 @@ func initBuildModel(verbose bool) buildModel {
 		builds:         map[int64]*build{},
 		transfers:      map[int64]int64{},
 		lastMsg:        "Initializing build...",
+		errs:           []error{},
 	}
 }
 
 func (m buildModel) error() error {
-	return m.err
+	if len(m.errs) > 0 {
+		return errors.Join(m.errs...)
+	}
+
+	return nil
 }
 
 func (m buildModel) Init() tea.Cmd {
@@ -118,7 +123,7 @@ func (m buildModel) handleEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 			// Lix does not have builtins.warn, this means warnings are logged at log level error
 			traceWarning := strings.HasPrefix(event.Text, "trace: ") && strings.Contains(event.Text, "warning:")
 			if !traceWarning {
-				m.err = errors.New(event.Text)
+				m.errs = append(m.errs, errors.New(event.Text))
 				return m, nil
 			}
 		}
@@ -267,7 +272,7 @@ func (m buildModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 }
 
 func (m buildModel) View() string {
-	if m.err != nil {
+	if len(m.errs) > 0 {
 		return fmt.Sprintf(
 			"%s%s\n",
 			m.spinner.View(),

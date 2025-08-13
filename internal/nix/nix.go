@@ -142,8 +142,7 @@ func (c NixCommand) runWithReporter(ctx context.Context, cmd string, args []stri
 	// Create a goroutine pool
 	p := pool.New().
 		WithContext(sctx).
-		WithCancelOnError().
-		WithFirstError()
+		WithCancelOnError()
 
 	// Run progress reporter
 	p.Go(func(ctx context.Context) error {
