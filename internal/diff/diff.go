@@ -356,6 +356,11 @@ func decodeClosureSize(buf []byte) (int64, error) {
 }
 
 func Print(diff *Diff) {
+	if len(diff.Changed) == 0 && len(diff.Added) == 0 && len(diff.Removed) == 0 {
+		fmt.Println("No version changes.")
+		return
+	}
+
 	if len(diff.Changed) > 0 {
 		fmt.Println("Version changes:")
 		widest := 0
@@ -443,8 +448,10 @@ func Print(diff *Diff) {
 }
 
 func Execute(from, to *Generation) error {
+	preferInternal := os.Getenv("NILLA_UTILS_DIFF") == "internal"
+
 	// Just execute nvd diff if both are local, for now
-	if from.Executor.IsLocal() && to.Executor.IsLocal() {
+	if !preferInternal && from.Executor.IsLocal() && to.Executor.IsLocal() {
 		diff, _ := to.Executor.Command("nvd", "diff", from.Path, to.Path)
 		diff.SetStderr(os.Stderr)
 		diff.SetStdout(os.Stderr)
