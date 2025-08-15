@@ -1,8 +1,10 @@
 {config}: let
   inherit (config) inputs lib;
-  inherit (builtins) listToAttrs mapAttrs pathExists;
+  inherit (builtins) listToAttrs mapAttrs pathExists concatLists;
 
   globalModules = config.modules;
+
+  forEach = xs: f: map f xs;
 in {
   includes = [
     ./lib.nix
@@ -103,9 +105,16 @@ in {
     };
 
     generators.home = {
-      username = lib.options.create {
-        type = lib.types.string;
-        description = "The username to use for all discovered home-manager hosts.";
+      # TODO kill switch for users, but not condition not implemented yet
+      # optionals ((builtins.hasAttr username config.generators.home.users) && config.generators.home.users.${username}.enable)
+      users = lib.options.create {
+        type = lib.types.attrs.of (lib.types.submodule (usersSubmod: {
+          options.enable = lib.options.create {
+            type = lib.types.bool;
+            default.value = true;
+            description = "Whether create ${usersSubmod} user home-manager";
+          };
+        }));
       };
       folder = lib.options.create {
         type = lib.types.nullish lib.types.path;
@@ -162,25 +171,29 @@ in {
     systems.home =
       lib.modules.when
       (config.generators.home.folder != null && pathExists config.generators.home.folder)
-      (listToAttrs (map (host: {
-        name = "${config.generators.home.username}@${host.hostname}";
-        value = {
-          args =
-            {
-              inputs = config.inputs;
-            }
-            // config.generators.home.args;
-          modules =
-            [
-              host.configuration
-              ({lib, ...}: {
-                home.username = lib.mkDefault config.generators.home.username;
-                home.homeDirectory = lib.mkDefault "/home/${config.generators.home.username}";
-              })
-            ]
-            ++ config.generators.home.modules;
-        };
-      }) (config.lib.utils.loadHostsFromDir config.generators.home.folder "home.nix")));
+      (listToAttrs (concatLists (map (host:
+        forEach host.users (username: {
+          name = "${username}@${host.hostname}";
+          value = {
+            args =
+              {
+                user = username;
+                inputs = config.inputs;
+                hostname = lib.optionals (config.nix.generateNixPathFromInputs) host.hostname;
+              }
+              // config.generators.home.args;
+            modules =
+              [
+                # we can make users folder name it variable, but I don't see the utility for now
+                (import "${config.generators.home.folder}/${host.hostname}/users/${username}.nix")
+                ({lib, ...}: {
+                  home.username = lib.mkDefault username;
+                  home.homeDirectory = lib.mkDefault "/home/${username}";
+                })
+              ]
+              ++ config.generators.home.modules;
+          };
+        })) (config.lib.utils.homeListUsers config.generators.home.folder))));
 
     # Generate home modules from `generators.homeModules`
     modules.home =

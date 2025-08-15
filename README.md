@@ -465,7 +465,9 @@ Given the following structure:
 .
 ├── hosts
 │   ├── system1
-│   │   └── home.nix
+│   │   └── users
+│   │   │   └── user1.nix
+│   │   │   └── user2.nix
 │   ├── system2
 │   │   ├── configuration.nix
 │   │   └── hardware-configuration.nix
@@ -474,7 +476,7 @@ Given the following structure:
 └── nilla.nix
 ```
 
-And the following `nilla.nix` will generate Home Manager system `user@system1`:
+And the following `nilla.nix` will generate Home Manager system `user1@system1`:
 
 ```nix
 # nilla.nix
@@ -492,8 +494,8 @@ in nilla.create ({config}: {
       # Set the folder to generate from.
       folder = ./hosts;
 
-      # User to set in all generated systems.
-      username = "user";
+      # Disable the creation of user2
+      users.user2.enable = false;
 
       # Pass args to home-manager modules.
       # The generator will automatically pass `config.inputs`
