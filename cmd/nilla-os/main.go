@@ -57,6 +57,10 @@ var app = &cli.Command{
 			Usage:       "Set log level to verbose",
 			HideDefault: true,
 		},
+		&cli.BoolFlag{
+			Name:  "raw",
+			Usage: "Raw output from Nix",
+		},
 		&cli.StringFlag{
 			Name:    "project",
 			Aliases: []string{"p"},
@@ -284,11 +288,13 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 	// Run nix build
 	printSection("Building configuration")
-	out, err := nix.Command("build").
+	nixBuildCmd := nix.Command("build").
 		Args(nargs).
-		Executor(builder).
-		Reporter(tui.NewBuildReporter(cmd.Bool("verbose"))).
-		Run(ctx)
+		Executor(builder)
+	if !cmd.Bool("raw") {
+		nixBuildCmd.Reporter(tui.NewBuildReporter(cmd.Bool("verbose")))
+	}
+	out, err := nixBuildCmd.Run(ctx)
 	if err != nil {
 		return err
 	}
@@ -350,14 +356,16 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		printSection("Copying system to target")
 
 		// Copy system closure
-		_, err := nix.Command("copy").
+		nixCopyCmd := nix.Command("copy").
 			Args([]string{
 				"--to", fmt.Sprintf("ssh://%s", cmd.String("target")),
 				string(out),
 			}).
-			Executor(builder).
-			Reporter(tui.NewCopyReporter(cmd.Bool("verbose"))).
-			Run(ctx)
+			Executor(builder)
+		if !cmd.Bool("raw") {
+			nixCopyCmd.Reporter(tui.NewCopyReporter(cmd.Bool("verbose")))
+		}
+		_, err := nixCopyCmd.Run(ctx)
 		if err != nil {
 			return err
 		}

@@ -63,6 +63,10 @@ var app = &cli.Command{
 			Usage:       "Set log level to verbose",
 			HideDefault: true,
 		},
+		&cli.BoolFlag{
+			Name:  "raw",
+			Usage: "Raw output from Nix",
+		},
 		&cli.StringFlag{
 			Name:    "project",
 			Aliases: []string{"p"},
@@ -276,10 +280,12 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 	// Run nix build
 	printSection("Building configuration")
-	out, err := nix.Command("build").
-		Args(nargs).
-		Reporter(tui.NewBuildReporter(cmd.Bool("verbose"))).
-		Run(ctx)
+	nixBuildCmd := nix.Command("build").
+		Args(nargs)
+	if !cmd.Bool("raw") {
+		nixBuildCmd.Reporter(tui.NewBuildReporter(cmd.Bool("verbose")))
+	}
+	out, err := nixBuildCmd.Run(ctx)
 	if err != nil {
 		return err
 	}
