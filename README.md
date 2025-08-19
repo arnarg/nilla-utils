@@ -457,24 +457,26 @@ in nilla.create ({config}: {
 
 ### Home Manager
 
-The Home Manager generator will generate Home Manager systems from a directory with sub-directories of hosts containing a `home.nix` file.
+The Home Manager generator will generate Home Manager systems from a directory with sub-directories of hosts containing a `home.nix` file or `home/<username>.nix` files.
 
 Given the following structure:
 
 ```
 .
 ├── hosts
-│   ├── system1
-│   │   └── home.nix
-│   ├── system2
-│   │   ├── configuration.nix
-│   │   └── hardware-configuration.nix
-│   └── something-else
-│       └── default.nix
+│   ├── system1
+│   │   └── home
+│   │       ├── user1.nix
+│   │       └── user2.nix
+│   ├── system2
+│   │   ├── home.nix
+│   │   └── configuration.nix
+│   └── something-else
+│       └── default.nix
 └── nilla.nix
 ```
 
-And the following `nilla.nix` will generate Home Manager system `user@system1`:
+And the following `nilla.nix` will generate Home Manager system `user1@system1`, `user2@system1` and `user@system2`:
 
 ```nix
 # nilla.nix
@@ -492,7 +494,8 @@ in nilla.create ({config}: {
       # Set the folder to generate from.
       folder = ./hosts;
 
-      # User to set in all generated systems.
+      # User to set in all generated systems
+      # if `<host>/home.nix` is found.
       username = "user";
 
       # Pass args to home-manager modules.
@@ -503,7 +506,8 @@ in nilla.create ({config}: {
       modules = [
         {
           # `home.username` and `home.homeDirectory` are automatically
-          # generated from `generators.home.username`.
+          # generated from `generators.home.username` or from the name
+          # of the user file if `<host>/home/<username>.nix` is found.
 
           # ...
         }

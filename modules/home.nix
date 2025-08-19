@@ -1,6 +1,6 @@
 {config}: let
   inherit (config) inputs lib;
-  inherit (builtins) listToAttrs mapAttrs pathExists;
+  inherit (builtins) listToAttrs mapAttrs pathExists concatMap;
 
   globalModules = config.modules;
 in {
@@ -162,25 +162,105 @@ in {
     systems.home =
       lib.modules.when
       (config.generators.home.folder != null && pathExists config.generators.home.folder)
-      (listToAttrs (map (host: {
-        name = "${config.generators.home.username}@${host.hostname}";
-        value = {
-          args =
-            {
-              inputs = config.inputs;
-            }
-            // config.generators.home.args;
-          modules =
-            [
-              host.configuration
-              ({lib, ...}: {
-                home.username = lib.mkDefault config.generators.home.username;
-                home.homeDirectory = lib.mkDefault "/home/${config.generators.home.username}";
+      (
+        let
+          inherit (builtins) readDir hasAttr filter attrNames;
+
+          loadUsers' = dir: let
+            users' = let
+              contents = readDir dir;
+            in
+              if (hasAttr "home" contents) && (contents.home == "directory")
+              then
+                filter
+                (n:
+                  (builtins.match ".*\.nix" n != null)
+                  && (readDir "${dir}/home")."${n}" == "regular")
+                (attrNames (readDir "${dir}/home"))
+              else [];
+          in
+            concatMap
+            (n: let
+              username = lib.strings.removeSuffix ".nix" n;
+              homeDir = readDir "${dir}/home";
+              hasConfig =
+                (hasAttr n homeDir)
+                && (homeDir."${n}" == "regular");
+            in
+              if hasConfig
+              then [
+                {
+                  username = username;
+                  configuration = import "${dir}/home/${n}";
+                }
+              ]
+              else [])
+            users';
+
+          loadUsersFromHostDir = dir: let
+            hosts' = let
+              contents = readDir dir;
+            in
+              filter
+              (n: contents."${n}" == "directory")
+              (attrNames contents);
+          in
+            concatMap
+            (
+              n: let
+                users = loadUsers' "${dir}/${n}";
+              in
+                if users != []
+                then [
+                  {
+                    hostname = n;
+                    users = users;
+                  }
+                ]
+                else []
+            )
+            hosts';
+
+          hosts = config.lib.utils.loadHostsFromDir config.generators.home.folder "home.nix";
+          hostsWithUsers = loadUsersFromHostDir config.generators.home.folder;
+
+          genHomeSystem = username: configuration: {
+            args =
+              {inherit (config) inputs;}
+              // config.generators.home.args;
+            modules =
+              [
+                configuration
+                ({lib, ...}: {
+                  home.username = lib.mkDefault username;
+                  home.homeDirectory = lib.mkDefault "/home/${username}";
+                })
+              ]
+              ++ config.generators.home.modules;
+          };
+        in
+          listToAttrs (
+            (
+              # Generate from `<folder>/<hostname>/home.nix`
+              map (host: {
+                name = "${config.generators.home.username}@${host.hostname}";
+                value = genHomeSystem config.generators.home.username host.configuration;
               })
-            ]
-            ++ config.generators.home.modules;
-        };
-      }) (config.lib.utils.loadHostsFromDir config.generators.home.folder "home.nix")));
+              hosts
+            )
+            ++ (
+              # Generate from `<folder>/<hostname>/home/<username>.nix`
+              concatMap
+              (host:
+                map (user: {
+                  name = "${user.username}@${host.hostname}";
+                  value = genHomeSystem user.username user.configuration;
+                })
+                host.users)
+              hostsWithUsers
+            )
+          )
+      );
 
     # Generate home modules from `generators.homeModules`
     modules.home =

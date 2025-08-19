@@ -60,5 +60,7 @@ in
       modules.home.common = {
         programs.git.enable = true;
       };
+
+      generators.home.folder = ./hosts;
     };
   })
