@@ -282,9 +282,11 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	printSection("Building configuration")
 	nixBuildCmd := nix.Command("build").
 		Args(nargs)
+
 	if !cmd.Bool("raw") {
-		nixBuildCmd.Reporter(tui.NewBuildReporter(cmd.Bool("verbose")))
+		nixBuildCmd = nixBuildCmd.Reporter(tui.NewBuildReporter(cmd.Bool("verbose")))
 	}
+
 	out, err := nixBuildCmd.Run(ctx)
 	if err != nil {
 		return err
