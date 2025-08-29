@@ -365,7 +365,7 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 			}).
 			Executor(builder)
 		if !cmd.Bool("raw") {
-			nixCopyCmd.Reporter(tui.NewCopyReporter(cmd.Bool("verbose")))
+			nixCopyCmd = nixCopyCmd.Reporter(tui.NewCopyReporter(cmd.Bool("verbose")))
 		}
 		_, err := nixCopyCmd.Run(ctx)
 		if err != nil {
