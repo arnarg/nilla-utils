@@ -1,4 +1,6 @@
-# nilla-utils
+![Logo saying "nilla-utils" in front of an ice cream cone with skulls on it in the style of a pink death metal band logo.](./logo.svg)
+
+---
 
 [Nilla](https://github.com/nilla-nix/nilla) modules and cli plugins to work with NixOS and home-manager configurations.
 
