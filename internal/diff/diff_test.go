@@ -125,7 +125,7 @@ func TestHasPackage(t *testing.T) {
 		},
 		{
 			name: "package does not exist",
-			set:  PackageSet{map[string]set.Unordered[string]{}},
+			set:  PackageSet{set.Unordered[string]{}, map[string]set.Unordered[string]{}},
 			in:   "gzip",
 			out:  false,
 		},
@@ -147,11 +147,12 @@ func TestGetPackagesVersions(t *testing.T) {
 		name string
 		set  PackageSet
 		in   string
-		out  []string
+		out  set.Unordered[string]
 	}{
 		{
 			name: "package exists",
 			set: PackageSet{
+				pnames: set.Unordered[string]{"gzip": true, "gnutar": true},
 				packages: map[string]set.Unordered[string]{
 					"gzip": {
 						"1.13":     true,
@@ -163,11 +164,11 @@ func TestGetPackagesVersions(t *testing.T) {
 				},
 			},
 			in:  "gzip",
-			out: []string{"1.13", "1.13-lib"},
+			out: set.Unordered[string]{"1.13": true, "1.13-lib": true},
 		},
 		{
 			name: "package does not exist",
-			set:  PackageSet{map[string]set.Unordered[string]{}},
+			set:  PackageSet{set.Unordered[string]{}, map[string]set.Unordered[string]{}},
 			in:   "gzip",
 			out:  nil,
 		},
@@ -194,6 +195,7 @@ func TestCalculate(t *testing.T) {
 		{
 			name: "diff with all possible changes",
 			from: PackageSet{
+				pnames: set.Unordered[string]{"gzip": true, "gnutar": true},
 				packages: map[string]set.Unordered[string]{
 					"gzip": {
 						"1.13":     true,
@@ -205,6 +207,7 @@ func TestCalculate(t *testing.T) {
 				},
 			},
 			to: PackageSet{
+				pnames: set.Unordered[string]{"gzip": true, "tar": true},
 				packages: map[string]set.Unordered[string]{
 					"gzip": {
 						"1.14":     true,
@@ -242,6 +245,7 @@ func TestCalculate(t *testing.T) {
 		{
 			name: "diff with no changes",
 			from: PackageSet{
+				pnames: set.Unordered[string]{"gzip": true, "gnutar": true},
 				packages: map[string]set.Unordered[string]{
 					"gzip": {
 						"1.13":     true,
@@ -253,6 +257,7 @@ func TestCalculate(t *testing.T) {
 				},
 			},
 			to: PackageSet{
+				pnames: set.Unordered[string]{"gzip": true, "gnutar": true},
 				packages: map[string]set.Unordered[string]{
 					"gzip": {
 						"1.13":     true,
@@ -277,6 +282,80 @@ func TestCalculate(t *testing.T) {
 
 			if diff := deep.Equal(result, tt.out); diff != nil {
 				t.Error(diff)
+			}
+		})
+	}
+}
+
+func TestFindLongestPrefixIndex(t *testing.T) {
+	tests := []struct {
+		name     string
+		before   []string
+		after    []string
+		expected int
+	}{
+		{
+			name:     "simple patch version bump",
+			before:   []string{"1.2.3"},
+			after:    []string{"1.2.4"},
+			expected: 4,
+		},
+		{
+			name:     "simple minor version bump",
+			before:   []string{"1.2.0"},
+			after:    []string{"1.3.0"},
+			expected: 2,
+		},
+		{
+			name:     "simple major version bump",
+			before:   []string{"1.2.0"},
+			after:    []string{"2.1.0"},
+			expected: 0,
+		},
+		{
+			name:     "version containing dash",
+			before:   []string{"2.4.11-lib"},
+			after:    []string{"2.4.11-man"},
+			expected: 7,
+		},
+		{
+			name:     "multiple versions mixed",
+			before:   []string{"2.4.11", "2.4.11-man"},
+			after:    []string{"2.5", "2.5-man", "2.5-lib"},
+			expected: 2,
+		},
+		{
+			name:     "multiple versions mixed unchanged",
+			before:   []string{"2.4.11", "2.4.11-man"},
+			after:    []string{"2.4.11", "2.4.11-man"},
+			expected: 6,
+		},
+		{
+			name:     "multiple versions with empty ones",
+			before:   []string{"", "257.7"},
+			after:    []string{"", "257.8"},
+			expected: 4,
+		},
+		{
+			name:     "only empty version strings",
+			before:   []string{""},
+			after:    []string{""},
+			expected: 0,
+		},
+		{
+			name:     "only actual version removed",
+			before:   []string{"", "257.7"},
+			after:    []string{"", ""},
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := findLongestPrefixIndex(tt.before, tt.after)
+
+			if tt.expected != result {
+				t.Errorf("expected %d, got %d", tt.expected, result)
 			}
 		})
 	}

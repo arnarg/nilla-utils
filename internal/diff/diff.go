@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/arnarg/nilla-utils/internal/exec"
@@ -355,6 +356,89 @@ func decodeClosureSize(buf []byte) (int64, error) {
 	return 0, nil
 }
 
+func findLongestPrefixIndex(before, after []string) int {
+	// If both are empty there's no need to continue
+	if len(before) == 0 || len(after) == 0 {
+		return 0
+	}
+
+	// Set arbitrary shortest length that should never be exceeded
+	shortestLen := 250
+	maxPrefixIndex := 0
+
+	// For each combination of before and after versions, find the longest common prefix
+	for _, a := range before {
+		// Skip empty versions
+		if a == "" {
+			continue
+		}
+
+		// Check if current version is shortest seen
+		if len(a) < shortestLen {
+			shortestLen = len(a)
+		}
+
+		for _, b := range after {
+			// Skip empty versions
+			if b == "" {
+				continue
+			}
+
+			// Check if current version is shortest seen
+			if len(b) < shortestLen {
+				shortestLen = len(b)
+			}
+
+			// Find the longest common prefix between a and b
+			i := 0
+			for i < len(a) && i < len(b) && a[i] == b[i] {
+				i++
+			}
+
+			// Adjust index to the last '.' or '-' character
+			for i > 0 && a[i-1] != '.' && a[i-1] != '-' {
+				i--
+			}
+
+			// Update max prefix index if this is larger
+			if i > maxPrefixIndex {
+				maxPrefixIndex = i
+			}
+		}
+	}
+
+	// Ensure we don't exceed the shortest string length
+	if maxPrefixIndex > shortestLen {
+		maxPrefixIndex = shortestLen
+	}
+
+	return maxPrefixIndex
+}
+
+func formatVersionList(versions []string, longest int, clr lipgloss.Color) []string {
+	out := []string{}
+
+	for _, ver := range versions {
+		if len(ver) < 1 {
+			out = append(out, "<none>")
+			continue
+		}
+
+		prefix := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("3")).
+			SetString(ver[:longest]).
+			String()
+		suffix := lipgloss.NewStyle().
+			Foreground(clr).
+			SetString(ver[longest:]).
+			String()
+
+		out = append(out, prefix+suffix)
+	}
+
+	return out
+}
+
 func Print(diff *Diff) {
 	if len(diff.Changed) == 0 && len(diff.Added) == 0 && len(diff.Removed) == 0 {
 		fmt.Println("No version changes.")
@@ -370,24 +454,22 @@ func Print(diff *Diff) {
 			}
 		}
 
+		width := len(strconv.Itoa(len(diff.Changed)))
+		fmtString := "#%0" + strconv.FormatInt(int64(width), 10) + "d  %s  %s -> %s\n"
 		for i, pkg := range diff.Changed {
+			longest := findLongestPrefixIndex(pkg.Before, pkg.After)
+
 			fmt.Fprintf(
 				os.Stderr,
-				"#%02d  %s  %s -> %s\n",
+				fmtString,
 				i+1,
 				lipgloss.NewStyle().
 					Width(widest).
 					Foreground(lipgloss.Color("10")).
 					SetString(pkg.PName).
 					String(),
-				lipgloss.NewStyle().
-					Foreground(lipgloss.Color("3")).
-					SetString(strings.Join(pkg.Before, ", ")).
-					String(),
-				lipgloss.NewStyle().
-					Foreground(lipgloss.Color("3")).
-					SetString(strings.Join(pkg.After, ", ")).
-					String(),
+				strings.Join(formatVersionList(pkg.Before, longest, lipgloss.Color("1")), ", "),
+				strings.Join(formatVersionList(pkg.After, longest, lipgloss.Color("2")), ", "),
 			)
 		}
 	}
@@ -401,10 +483,12 @@ func Print(diff *Diff) {
 			}
 		}
 
+		width := len(strconv.Itoa(len(diff.Added)))
+		fmtString := "#%0" + strconv.FormatInt(int64(width), 10) + "d  %s  %s\n"
 		for i, pkg := range diff.Added {
 			fmt.Fprintf(
 				os.Stderr,
-				"#%02d  %s  %s\n",
+				fmtString,
 				i+1,
 				lipgloss.NewStyle().
 					Width(widest).
@@ -428,10 +512,12 @@ func Print(diff *Diff) {
 			}
 		}
 
+		width := len(strconv.Itoa(len(diff.Removed)))
+		fmtString := "#%0" + strconv.FormatInt(int64(width), 10) + "d  %s  %s\n"
 		for i, pkg := range diff.Removed {
 			fmt.Fprintf(
 				os.Stderr,
-				"#%02d  %s  %s\n",
+				fmtString,
 				i+1,
 				lipgloss.NewStyle().
 					Width(widest).
