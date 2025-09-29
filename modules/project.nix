@@ -1,6 +1,8 @@
-{config}: let
+{ config }:
+let
   inherit (config) lib;
-in {
+in
+{
   options.generators = {
     project.folder = lib.options.create {
       type = lib.types.nullish lib.types.path;
@@ -16,12 +18,11 @@ in {
   };
 
   config = {
-    generators = let
-      folder = config.generators.project.folder;
-    in
-      lib.modules.when
-      (folder != null)
-      {
+    generators =
+      let
+        folder = config.generators.project.folder;
+      in
+      lib.modules.when (folder != null) {
         packages.folder = "${folder}/packages";
         shells.folder = "${folder}/shells";
         overlays.default.folder = "${folder}/packages";

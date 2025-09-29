@@ -3,7 +3,9 @@ let
 
   nilla = import pins.nilla;
 in
-  nilla.create ({config}: {
+nilla.create (
+  { config }:
+  {
     includes = [
       ../../modules
     ];
@@ -18,17 +20,20 @@ in
         system = "x86_64-linux";
 
         modules = [
-          ({nixosModules, ...}: {
-            imports = [nixosModules.common];
+          (
+            { nixosModules, ... }:
+            {
+              imports = [ nixosModules.common ];
 
-            boot.loader.grub.devices = ["/dev/sda"];
-            fileSystems = {
-              "/" = {
-                device = "/dev/sda1";
+              boot.loader.grub.devices = [ "/dev/sda" ];
+              fileSystems = {
+                "/" = {
+                  device = "/dev/sda1";
+                };
               };
-            };
-            system.stateVersion = "24.11";
-          })
+              system.stateVersion = "24.11";
+            }
+          )
         ];
       };
 
@@ -37,7 +42,8 @@ in
           isNormalUser = true;
           group = "myuser";
         };
-        users.groups.myuser = {};
+        users.groups.myuser = { };
       };
     };
-  })
+  }
+)

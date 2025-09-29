@@ -3,7 +3,9 @@ let
 
   nilla = import pins.nilla;
 in
-  nilla.create ({config}: {
+nilla.create (
+  { config }:
+  {
     includes = [
       ../../modules
     ];
@@ -23,4 +25,5 @@ in
       # of ./shells
       generators.shells.folder = ./shells;
     };
-  })
+  }
+)

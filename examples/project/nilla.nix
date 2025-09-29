@@ -3,7 +3,9 @@ let
 
   nilla = import pins.nilla;
 in
-  nilla.create ({config}: {
+nilla.create (
+  { config }:
+  {
     includes = [
       ../../modules
     ];
@@ -22,4 +24,5 @@ in
       # - generators.home.folder = "./hosts";
       generators.project.folder = ./.;
     };
-  })
+  }
+)

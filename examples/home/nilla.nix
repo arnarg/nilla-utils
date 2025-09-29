@@ -3,7 +3,9 @@ let
 
   nilla = import pins.nilla;
 in
-  nilla.create ({config}: {
+nilla.create (
+  { config }:
+  {
     includes = [
       ../../modules
     ];
@@ -47,13 +49,16 @@ in
         home-manager = config.inputs.hm-master;
 
         modules = [
-          ({homeModules, ...}: {
-            imports = [homeModules.common];
+          (
+            { homeModules, ... }:
+            {
+              imports = [ homeModules.common ];
 
-            home.username = "user";
-            home.homeDirectory = "/home/user";
-            home.stateVersion = "24.11";
-          })
+              home.username = "user";
+              home.homeDirectory = "/home/user";
+              home.stateVersion = "24.11";
+            }
+          )
         ];
       };
 
@@ -63,4 +68,5 @@ in
 
       generators.home.folder = ./hosts;
     };
-  })
+  }
+)

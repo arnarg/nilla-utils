@@ -3,21 +3,30 @@ let
 
   nilla = import pins.nilla;
 
-  systems = ["x86_64-linux" "aarch64-linux"];
+  systems = [
+    "x86_64-linux"
+    "aarch64-linux"
+  ];
 in
-  nilla.create ({config, ...}: {
+nilla.create (
+  { config, ... }:
+  {
     config = {
       inputs = {
         nixpkgs = {
           src = pins.nixpkgs;
 
           settings.overlays = [
-            (final: prev: let
-              callPackage = final.callPackage;
-            in {
-              inherit (callPackage "${pins.gomod2nix}/builder" {}) buildGoApplication mkGoEnv mkVendorEnv;
-              gomod2nix = callPackage "${pins.gomod2nix}/default.nix" {};
-            })
+            (
+              final: prev:
+              let
+                callPackage = final.callPackage;
+              in
+              {
+                inherit (callPackage "${pins.gomod2nix}/builder" { }) buildGoApplication mkGoEnv mkVendorEnv;
+                gomod2nix = callPackage "${pins.gomod2nix}/default.nix" { };
+              }
+            )
           ];
         };
       };
@@ -38,13 +47,14 @@ in
         builder = "nixpkgs";
         settings.pkgs = config.inputs.nixpkgs.result;
 
-        shell = {
-          mkShellNoCC,
-          npins,
-          gomod2nix,
-          nvd,
-          ...
-        }:
+        shell =
+          {
+            mkShellNoCC,
+            npins,
+            gomod2nix,
+            nvd,
+            ...
+          }:
           mkShellNoCC {
             packages = [
               npins
@@ -54,4 +64,5 @@ in
           };
       };
     };
-  })
+  }
+)
