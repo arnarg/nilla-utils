@@ -534,10 +534,10 @@ func Print(diff *Diff) {
 }
 
 func Execute(from, to *Generation) error {
-	preferInternal := os.Getenv("NILLA_UTILS_DIFF") == "internal"
+	preferNvd := os.Getenv("NILLA_UTILS_DIFF") == "nvd"
 
 	// Just execute nvd diff if both are local, for now
-	if !preferInternal && from.Executor.IsLocal() && to.Executor.IsLocal() {
+	if preferNvd && from.Executor.IsLocal() && to.Executor.IsLocal() {
 		diff, _ := to.Executor.Command("nvd", "diff", from.Path, to.Path)
 		diff.SetStderr(os.Stderr)
 		diff.SetStdout(os.Stderr)
