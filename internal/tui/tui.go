@@ -67,6 +67,7 @@ func runTUIModel(ctx context.Context, init tuiModel, decoder *nix.ProgressDecode
 }
 
 type progress struct {
+	id       int64
 	done     int
 	expected int
 	running  int
@@ -102,6 +103,19 @@ func (p progresses) totalRunning() int {
 	return total
 }
 
+type transfer struct {
+	id       int64
+	done     int64
+	expected int64
+}
+
+func (r transfer) String() string {
+	total, unit := util.ConvertBytes(r.expected)
+	done := util.ConvertBytesToUnit(r.done, unit)
+
+	return fmt.Sprintf("[%.2f/%.2f %s]", done, total, unit)
+}
+
 type copy struct {
 	name  string
 	done  int64
@@ -116,4 +130,29 @@ func (c *copy) String() string {
 		return fmt.Sprintf("%s [%.2f/%.2f %s]", c.name, done, total, unit)
 	}
 	return c.name
+}
+
+type copies map[int64]*copy
+
+func (c copies) done() int64 {
+	total := int64(0)
+	for _, copy := range c {
+		total += copy.done
+	}
+	return total
+}
+
+func (c copies) total() int64 {
+	total := int64(0)
+	for _, copy := range c {
+		total += copy.total
+	}
+	return total
+}
+
+func (c copies) String() string {
+	total, unit := util.ConvertBytes(c.total())
+	done := util.ConvertBytesToUnit(c.done(), unit)
+
+	return fmt.Sprintf("[%.2f/%.2f %s]", done, total, unit)
 }

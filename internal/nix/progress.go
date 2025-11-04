@@ -79,6 +79,16 @@ func (e StartBuildsEvent) Action() ActionType {
 	return ActionTypeStart
 }
 
+// StartRealiseEvent
+type StartRealiseEvent struct {
+	ID     int64
+	Parent int64
+}
+
+func (e StartRealiseEvent) Action() ActionType {
+	return ActionTypeStart
+}
+
 // StartCopyPathEvent
 type StartCopyPathEvent struct {
 	ID   int64
@@ -135,6 +145,26 @@ type ResultSetPhaseEvent struct {
 }
 
 func (e ResultSetPhaseEvent) Action() ActionType {
+	return ActionTypeResult
+}
+
+// ResultSetExpectedCopyPathEvent
+type ResultSetExpectedCopyPathEvent struct {
+	ID       int64
+	Expected int64
+}
+
+func (e ResultSetExpectedCopyPathEvent) Action() ActionType {
+	return ActionTypeResult
+}
+
+// ResultSetExpectedFileTransferEvent
+type ResultSetExpectedFileTransferEvent struct {
+	ID       int64
+	Expected int64
+}
+
+func (e ResultSetExpectedFileTransferEvent) Action() ActionType {
 	return ActionTypeResult
 }
 
@@ -196,7 +226,7 @@ func (d *ProgressDecoder) Events(yield func(Event) bool) {
 
 		// Just drop lines not starting with the "@nix " prefix
 		if !bytes.HasPrefix(line, d.prefix) {
-			break
+			continue
 		}
 
 		// Parse event
@@ -254,6 +284,8 @@ func decodeRawStartEvent(val *fastjson.Value) Event {
 		return decodeRawStartCopyPathsEvent(val)
 	case protoEventTypeBuilds:
 		return decodeRawStartBuildsEvent(val)
+	case protoEventTypeRealise:
+		return decodeRawStartRealiseEvent(val)
 	case protoEventTypeCopyPath:
 		return decodeRawStartCopyPathEvent(val)
 	case protoEventTypeBuild:
@@ -286,6 +318,19 @@ func decodeRawStartBuildsEvent(val *fastjson.Value) Event {
 	}
 
 	return StartBuildsEvent{
+		ID:     id,
+		Parent: val.GetInt64("parent"),
+	}
+}
+
+func decodeRawStartRealiseEvent(val *fastjson.Value) Event {
+	id := val.GetInt64("id")
+	// If ID is 0, we just ignore the event
+	if id < 1 {
+		return nil
+	}
+
+	return StartRealiseEvent{
 		ID:     id,
 		Parent: val.GetInt64("parent"),
 	}
@@ -417,6 +462,8 @@ func decodeRawResultEvent(val *fastjson.Value) Event {
 	switch val.GetInt("type") {
 	case protoResultTypeProgress:
 		return decodeRawResultProgressEvent(val)
+	case protoResultTypeSetExpected:
+		return decodeRawResultSetExpectedEvent(val)
 	case protoResultTypeSetPhase:
 		return decodeRawResultSetPhaseEvent(val)
 	case protoResultTypeBuildLogLine:
@@ -474,6 +521,36 @@ func decodeRawResultSetPhaseEvent(val *fastjson.Value) Event {
 	}
 
 	return ResultSetPhaseEvent{id, string(phase)}
+}
+
+func decodeRawResultSetExpectedEvent(val *fastjson.Value) Event {
+	id := val.GetInt64("id")
+	// If ID is 0, we just ignore the event
+	if id < 1 {
+		return nil
+	}
+
+	// Parse fields
+	fields := val.GetArray("fields")
+	if fields == nil {
+		return nil
+	}
+	if len(fields) < 2 {
+		return nil
+	}
+
+	// Parse phase
+	evType := fields[0].GetInt()
+	expected := fields[1].GetInt64()
+
+	switch evType {
+	case protoEventTypeCopyPath:
+		return ResultSetExpectedCopyPathEvent{id, expected}
+	case protoEventTypeFileTransfer:
+		return ResultSetExpectedFileTransferEvent{id, expected}
+	}
+
+	return nil
 }
 
 func decodeRawResultBuildLogLineEvent(val *fastjson.Value) Event {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/arnarg/nilla-utils/internal/nix"
+	"github.com/arnarg/nilla-utils/internal/util"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -32,9 +33,10 @@ type copyModel struct {
 	verbose     bool
 	initialized bool
 
-	copyPathsProgs progresses
+	copyPathsProgress progress
+	transferProgress  transfer
 
-	copies    map[int64]*copy
+	copies    copies
 	transfers map[int64]int64
 
 	lastMsg string
@@ -48,12 +50,13 @@ func initCopyModel(verbose bool) copyModel {
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	return copyModel{
-		verbose:        verbose,
-		spinner:        s,
-		copyPathsProgs: map[int64]progress{},
-		copies:         map[int64]*copy{},
-		transfers:      map[int64]int64{},
-		lastMsg:        "Initializing...",
+		verbose:           verbose,
+		spinner:           s,
+		copyPathsProgress: progress{id: 0},
+		transferProgress:  transfer{id: 0},
+		copies:            map[int64]*copy{},
+		transfers:         map[int64]int64{},
+		lastMsg:           "Initializing...",
 	}
 }
 
@@ -116,7 +119,8 @@ func (m copyModel) handleEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 func (m copyModel) handleStartEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 	switch ev := ev.(type) {
 	case nix.StartCopyPathsEvent:
-		m.copyPathsProgs[ev.ID] = progress{}
+		m.copyPathsProgress = progress{id: ev.ID}
+		m.transferProgress = transfer{id: ev.ID}
 		if !m.initialized {
 			m.initialized = true
 		}
@@ -145,6 +149,8 @@ func (m copyModel) handleStartEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 func (m copyModel) handleStopEvent(ev nix.StopEvent) (tea.Model, tea.Cmd) {
 	// Check if it's a copy
 	if c, ok := m.copies[ev.ID]; ok {
+		// Add to transfer progress
+		m.transferProgress.done += c.total
 		// Remove from copies map
 		delete(m.copies, ev.ID)
 		if m.verbose {
@@ -179,11 +185,10 @@ func (m copyModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 	switch ev := ev.(type) {
 	case nix.ResultProgressEvent:
 		// Check if the event ID is a CopyPaths event
-		if p, ok := m.copyPathsProgs[ev.ID]; ok {
-			p.done = int(ev.Done)
-			p.expected = int(ev.Expected)
-			p.running = ev.Running
-			m.copyPathsProgs[ev.ID] = p
+		if ev.ID == m.copyPathsProgress.id {
+			m.copyPathsProgress.done = int(ev.Done)
+			m.copyPathsProgress.expected = int(ev.Expected)
+			m.copyPathsProgress.running = ev.Running
 			return m, nil
 		}
 
@@ -204,6 +209,13 @@ func (m copyModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 			c.total = ev.Expected
 
 			m.lastMsg = c.String()
+		}
+
+	case nix.ResultSetExpectedCopyPathEvent:
+		// Check if event ID matches realise progress
+		if ev.ID == m.transferProgress.id {
+			m.transferProgress.expected = ev.Expected
+			return m, nil
 		}
 	}
 	return m, nil
@@ -266,22 +278,27 @@ func (m copyModel) progressView() string {
 func fmtTransfers(m copyModel) string {
 	running := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("11")).
-		SetString(fmt.Sprintf("↑ %d", m.copyPathsProgs.totalRunning())).
+		SetString(fmt.Sprintf("↑ %d", m.copyPathsProgress.running)).
 		String()
 
 	done := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("10")).
-		SetString(fmt.Sprintf("✓ %d", m.copyPathsProgs.totalDone())).
+		SetString(fmt.Sprintf("✓ %d", m.copyPathsProgress.done)).
 		String()
 
 	remaining := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("12")).
 		SetString(
 			fmt.Sprintf(
-				"⧗ %d", m.copyPathsProgs.totalExpected()-m.copyPathsProgs.totalDone(),
+				"⧗ %d", m.copyPathsProgress.expected-m.copyPathsProgress.done-m.copyPathsProgress.running,
 			),
 		).
 		String()
 
-	return fmt.Sprintf("%s | %s | %s", running, done, remaining)
+	// Format transfer progress
+	rTotal, unit := util.ConvertBytes(m.transferProgress.expected)
+	rDone := util.ConvertBytesToUnit(m.transferProgress.done+m.copies.done(), unit)
+	rProgress := fmt.Sprintf("[%.2f/%.2f %s]", rDone, rTotal, unit)
+
+	return fmt.Sprintf("%s | %s | %s %s", running, done, remaining, rProgress)
 }

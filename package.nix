@@ -5,7 +5,7 @@
   makeWrapper,
 }:
 let
-  version = "0.0.0-alpha.14";
+  version = "0.0.0-alpha.15";
 in
 buildGoApplication {
   inherit version;

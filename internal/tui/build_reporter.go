@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/arnarg/nilla-utils/internal/nix"
+	"github.com/arnarg/nilla-utils/internal/util"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -48,10 +49,11 @@ type buildModel struct {
 	verbose     bool
 	initialized bool
 
-	copyPathsProgs progresses
-	buildsProgs    progresses
+	buildProgress     progress
+	copyPathsProgress progress
+	realiseProgress   transfer
 
-	downloads map[int64]*copy
+	downloads copies
 	transfers map[int64]int64
 	builds    map[int64]*build
 
@@ -66,15 +68,16 @@ func initBuildModel(verbose bool) buildModel {
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	return buildModel{
-		verbose:        verbose,
-		spinner:        s,
-		copyPathsProgs: map[int64]progress{},
-		buildsProgs:    map[int64]progress{},
-		downloads:      map[int64]*copy{},
-		builds:         map[int64]*build{},
-		transfers:      map[int64]int64{},
-		lastMsg:        "Initializing build...",
-		errs:           []error{},
+		verbose:           verbose,
+		spinner:           s,
+		buildProgress:     progress{id: 0},
+		copyPathsProgress: progress{id: 0},
+		realiseProgress:   transfer{id: 0},
+		downloads:         map[int64]*copy{},
+		builds:            map[int64]*build{},
+		transfers:         map[int64]int64{},
+		lastMsg:           "Initializing build...",
+		errs:              []error{},
 	}
 }
 
@@ -141,17 +144,21 @@ func (m buildModel) handleEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 func (m buildModel) handleStartEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 	switch ev := ev.(type) {
 	case nix.StartCopyPathsEvent:
-		m.copyPathsProgs[ev.ID] = progress{}
+		m.copyPathsProgress = progress{id: ev.ID}
 		if !m.initialized {
 			m.initialized = true
 		}
 		return m, nil
 
 	case nix.StartBuildsEvent:
-		m.buildsProgs[ev.ID] = progress{}
+		m.buildProgress = progress{id: ev.ID}
 		if !m.initialized {
 			m.initialized = true
 		}
+		return m, nil
+
+	case nix.StartRealiseEvent:
+		m.realiseProgress = transfer{id: ev.ID}
 		return m, nil
 
 	case nix.StartCopyPathEvent:
@@ -186,7 +193,9 @@ func (m buildModel) handleStopEvent(ev nix.StopEvent) (tea.Model, tea.Cmd) {
 	}
 
 	// Then check if it's a download
-	if _, ok := m.downloads[ev.ID]; ok {
+	if d, ok := m.downloads[ev.ID]; ok {
+		// Add to realise progress
+		m.realiseProgress.done += d.total
 		// Remove from downloads map
 		delete(m.downloads, ev.ID)
 	}
@@ -221,17 +230,21 @@ func (m buildModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 
 	case nix.ResultProgressEvent:
 		// Check if the event ID is a CopyPaths or Builds event
-		if cp, ok := m.copyPathsProgs[ev.ID]; ok {
-			cp.done = int(ev.Done)
-			cp.expected = int(ev.Expected)
-			cp.running = ev.Running
-			m.copyPathsProgs[ev.ID] = cp
+		if ev.ID == m.copyPathsProgress.id {
+			m.copyPathsProgress = progress{
+				id:       ev.ID,
+				done:     int(ev.Done),
+				expected: int(ev.Expected),
+				running:  ev.Running,
+			}
 			return m, nil
-		} else if bp, ok := m.buildsProgs[ev.ID]; ok {
-			bp.done = int(ev.Done)
-			bp.expected = int(ev.Expected)
-			bp.running = ev.Running
-			m.buildsProgs[ev.ID] = bp
+		} else if ev.ID == m.buildProgress.id {
+			m.buildProgress = progress{
+				id:       ev.ID,
+				done:     int(ev.Done),
+				expected: int(ev.Expected),
+				running:  ev.Running,
+			}
 			return m, nil
 		}
 
@@ -251,6 +264,13 @@ func (m buildModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 
 		m.lastMsg = d.String()
 		return m, nil
+
+	case nix.ResultSetExpectedFileTransferEvent:
+		// Check if event ID matches realise progress
+		if ev.ID == m.realiseProgress.id {
+			m.realiseProgress.expected = ev.Expected
+			return m, nil
+		}
 
 	case nix.ResultBuildLogLineEvent:
 		if m.verbose {
@@ -358,17 +378,17 @@ func (m buildModel) progressView() string {
 func fmtBuilds(m buildModel) string {
 	running := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("11")).
-		SetString(fmt.Sprintf("▶ %d", m.buildsProgs.totalRunning())).
+		SetString(fmt.Sprintf("▶ %d", m.buildProgress.running)).
 		String()
 
 	done := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("10")).
-		SetString(fmt.Sprintf("✓ %d", m.buildsProgs.totalDone())).
+		SetString(fmt.Sprintf("✓ %d", m.buildProgress.done)).
 		String()
 
 	remaining := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("12")).
-		SetString(fmt.Sprintf("⧗ %d", m.buildsProgs.totalExpected()-m.buildsProgs.totalDone())).
+		SetString(fmt.Sprintf("⧗ %d", m.buildProgress.expected-m.buildProgress.done-m.buildProgress.running)).
 		String()
 
 	return fmt.Sprintf("%s | %s | %s", running, done, remaining)
@@ -377,22 +397,27 @@ func fmtBuilds(m buildModel) string {
 func fmtDownloads(m buildModel) string {
 	running := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("11")).
-		SetString(fmt.Sprintf("↓ %d", m.copyPathsProgs.totalRunning())).
+		SetString(fmt.Sprintf("↓ %d", m.copyPathsProgress.running)).
 		String()
 
 	done := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("10")).
-		SetString(fmt.Sprintf("✓ %d", m.copyPathsProgs.totalDone())).
+		SetString(fmt.Sprintf("✓ %d", m.copyPathsProgress.done)).
 		String()
 
 	remaining := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("12")).
 		SetString(
 			fmt.Sprintf(
-				"⧗ %d", m.copyPathsProgs.totalExpected()-m.copyPathsProgs.totalDone(),
+				"⧗ %d", m.copyPathsProgress.expected-m.copyPathsProgress.done-m.copyPathsProgress.running,
 			),
 		).
 		String()
 
-	return fmt.Sprintf("%s | %s | %s", running, done, remaining)
+	// Format realise progress
+	rTotal, unit := util.ConvertBytes(m.realiseProgress.expected)
+	rDone := util.ConvertBytesToUnit(m.realiseProgress.done+m.downloads.done(), unit)
+	rProgress := fmt.Sprintf("[%.2f/%.2f %s]", rDone, rTotal, unit)
+
+	return fmt.Sprintf("%s | %s | %s %s", running, done, remaining, rProgress)
 }
