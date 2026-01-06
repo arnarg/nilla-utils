@@ -79,6 +79,19 @@ var app = &cli.Command{
 			Usage:   "The nilla project to use",
 			Value:   "./",
 		},
+		&cli.StringFlag{
+			Name:    "target",
+			Aliases: []string{"t"},
+			Usage:   "Target host to deploy/activate on (for switch command). Can also be used with --build-on-target for builds.",
+		},
+		&cli.StringFlag{
+			Name:  "build-on",
+			Usage: "Build on the specified host instead of locally. Dependencies are fetched from target's substituters.",
+		},
+		&cli.BoolFlag{
+			Name:  "build-on-target",
+			Usage: "Build on the same host as specified by --target (requires --target flag). Dependencies are fetched from target's substituters.",
+		},
 	},
 	Commands: []*cli.Command{
 		// Build
@@ -220,6 +233,8 @@ func findHomeConfiguration(p string, names []string) (string, error) {
 }
 
 func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
+	var builder, target exec.Executor
+
 	// Setup logger
 	util.InitLogger(verboseCount)
 
@@ -228,6 +243,9 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	if err != nil {
 		return err
 	}
+
+	// Setup builder, which is always local
+	builder = exec.NewLocalExecutor()
 
 	// Try to find current generation
 	current, err := generation.CurrentHomeGeneration()
@@ -261,8 +279,25 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 	log.Infof("Found system \"%s\"", name)
 
-	// Setup builder, which is always local
-	builder := exec.NewLocalExecutor()
+	// Determine build location
+	var buildTarget string
+	if cmd.String("build-on") != "" {
+		buildTarget = cmd.String("build-on")
+	} else if cmd.Bool("build-on-target") {
+		buildTarget = cmd.String("target")
+		if buildTarget == "" {
+			return fmt.Errorf("--build-on-target requires --target to be specified")
+		}
+	}
+
+	// Validate and prepare remote build if enabled
+	var storeAddress string
+	if buildTarget != "" {
+		user, hostname := util.ParseTarget(buildTarget)
+		storeAddress = util.BuildStoreAddress(user, hostname)
+		log.Debugf("Remote build enabled, target: %s, store: %s", buildTarget, storeAddress)
+	}
+
 
 	//
 	// Home Manager configuration build
@@ -284,6 +319,46 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		nargs = append(nargs, "--no-link")
 	}
 
+	// Handle remote builds
+	if buildTarget != "" && storeAddress != "" {
+		// First, get the derivation path by evaluating the attribute
+		// We use nix eval to get the derivation path
+		printSection("Getting derivation path")
+		derivationAttr := fmt.Sprintf("%s.drvPath", attr)
+		evalArgs := []string{
+			"-f", source.FullNillaPath(),
+			derivationAttr,
+			"--raw",
+		}
+		evalCmd := nix.Command("eval").
+			Args(evalArgs).
+			Executor(builder)
+		derivationPath, err := evalCmd.Run(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get derivation path: %w", err)
+		}
+		derivationPathStr := strings.TrimSpace(string(derivationPath))
+
+		// Copy derivation to remote host
+		printSection("Copying derivation to remote host")
+		copyArgs := []string{
+			"--to", storeAddress,
+			"--derivation",
+			"-s", // fetch dependencies from target system's substituters
+			derivationPathStr,
+		}
+		copyCmd := nix.Command("copy").
+			Args(copyArgs).
+			Executor(builder)
+		if _, err := copyCmd.Run(ctx); err != nil {
+			return fmt.Errorf("failed to copy derivation to remote: %w", err)
+		}
+
+		// Add remote build flags
+		nargs = append(nargs, "--store", storeAddress)
+		nargs = append(nargs, "--eval-store", "auto")
+	}
+
 	// Run nix build
 	printSection("Building configuration")
 	nixBuildCmd := nix.Command("build").
@@ -295,7 +370,24 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 	out, err := nixBuildCmd.Run(ctx)
 	if err != nil {
-		return err
+		log.Debugf("Nix build command failed with error: %v", err)
+		return fmt.Errorf("failed to build configuration: %w", err)
+	}
+	log.Debugf("Build completed successfully, output path: %s", string(out))
+
+	//
+	// Setup target executor
+	//
+	if cmd.String("target") != "" {
+		log.Debugf("Setting up SSH executor for target: %s", cmd.String("target"))
+		target, err = exec.NewSSHExecutor(cmd.String("target"))
+		if err != nil {
+			log.Debugf("Failed to create SSH executor: %v", err)
+			return fmt.Errorf("failed to create SSH executor: %w", err)
+		}
+		log.Debugf("SSH executor created successfully")
+	} else {
+		target = builder
 	}
 
 	//
@@ -304,18 +396,33 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	fmt.Fprintln(os.Stderr)
 	printSection("Comparing changes")
 
+	// Determine executors and paths for diff
+	newBuildExecutor, err := determineNewBuildExecutor(builder, target, buildTarget, storeAddress, cmd.String("target"))
+	if err != nil {
+		return err
+	}
+	currentExecutor, currentPath := determineCurrentGenerationExecutor(builder, target, current, name, cmd.String("target"))
+	if currentPath == "" {
+		remoteUsername := extractUsername(name)
+		return fmt.Errorf("current Home Manager generation not found on target %s for user %s", cmd.String("target"), remoteUsername)
+	}
+
+	log.Debugf("Running diff: current=%s (executor=%T), new=%s (executor=%T)", currentPath, currentExecutor, string(out), newBuildExecutor)
+
 	if err := diff.Execute(
 		&diff.Generation{
-			Path:     current.Path(),
-			Executor: builder,
+			Path:     currentPath,
+			Executor: currentExecutor,
 		},
 		&diff.Generation{
 			Path:     string(out),
-			Executor: builder,
+			Executor: newBuildExecutor,
 		},
 	); err != nil {
-		return err
+		log.Debugf("Diff execution failed with error: %v", err)
+		return fmt.Errorf("failed to compare changes: %w", err)
 	}
+	log.Debugf("Diff execution completed successfully")
 
 	// Build can exit now
 	if sc == subCmdBuild {
@@ -342,11 +449,22 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		fmt.Fprintln(os.Stderr)
 		printSection("Activating configuration")
 
-		// Run switch_to_configuration
-		switchp := fmt.Sprintf("%s/activate", out)
-		switchc := gexec.Command(switchp)
-		switchc.Stderr = os.Stderr
-		switchc.Stdout = os.Stdout
+		// Determine executor for activation (use target if set, otherwise local)
+		activateExecutor := builder
+		if cmd.String("target") != "" {
+			activateExecutor = target
+		}
+
+		// Run activation script
+		switchp := fmt.Sprintf("%s/activate", string(out))
+		switchc, err := activateExecutor.Command(switchp)
+		if err != nil {
+			return fmt.Errorf("failed to create activation command: %w", err)
+		}
+
+		switchc.SetStdin(os.Stdin)
+		switchc.SetStderr(os.Stderr)
+		switchc.SetStdout(os.Stdout)
 
 		if err := switchc.Run(); err != nil {
 			return err
@@ -354,6 +472,53 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	}
 
 	return nil
+}
+
+// determineNewBuildExecutor selects the executor for the new build based on build location and target.
+func determineNewBuildExecutor(builder, target exec.Executor, buildTarget, storeAddress, targetStr string) (exec.Executor, error) {
+	if buildTarget != "" && storeAddress != "" {
+		// Built remotely
+		if buildTarget == targetStr && targetStr != "" {
+			return target, nil
+		}
+		// Built on different host - create executor for build host
+		buildExecutor, err := exec.NewSSHExecutor(buildTarget)
+		if err != nil {
+			log.Debugf("Failed to create SSH executor for build target: %v", err)
+			return nil, fmt.Errorf("failed to create SSH executor for build target: %w", err)
+		}
+		return buildExecutor, nil
+	}
+	if targetStr != "" {
+		// Built locally but deploying to target
+		return target, nil
+	}
+	return builder, nil
+}
+
+// determineCurrentGenerationExecutor selects the executor and path for the current generation.
+// Returns (executor, path). Path will be empty if not found on target.
+func determineCurrentGenerationExecutor(builder, target exec.Executor, current *generation.HomeGeneration, name, targetStr string) (exec.Executor, string) {
+	if targetStr == "" {
+		// No target - use local
+		return builder, current.Path()
+	}
+
+	// Target is set - query on target
+	remoteUsername := extractUsername(name)
+	remotePath, found := generation.CurrentHomeGenerationPath(target, remoteUsername)
+	if found {
+		return target, remotePath
+	}
+	return target, "" // Path not found
+}
+
+// extractUsername extracts username from Home Manager system name (e.g., "root@host1" -> "root").
+func extractUsername(name string) string {
+	if strings.Contains(name, "@") {
+		return strings.Split(name, "@")[0]
+	}
+	return name
 }
 
 func listConfigurations(ctx context.Context, cmd *cli.Command) error {

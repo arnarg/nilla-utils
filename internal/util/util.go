@@ -1,6 +1,7 @@
 package util
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
@@ -141,4 +142,23 @@ func levelStyle(level log.Level, color lipgloss.TerminalColor) lipgloss.Style {
 		Bold(true).
 		MaxWidth(4).
 		Foreground(color)
+}
+
+// ParseTarget parses a target string in the format "user@host" or "host" and returns
+// the user and hostname. If no user is specified, it returns an empty string for user.
+func ParseTarget(target string) (user, hostname string) {
+	parts := strings.Split(target, "@")
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return "", target
+}
+
+// BuildStoreAddress constructs an ssh-ng:// store address from user and hostname.
+// If user is empty, it uses the current local user as default (matching SSH executor behavior).
+func BuildStoreAddress(user, hostname string) string {
+	if user == "" {
+		user = GetUser()
+	}
+	return fmt.Sprintf("ssh-ng://%s@%s", user, hostname)
 }
