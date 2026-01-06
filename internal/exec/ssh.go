@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/arnarg/nilla-utils/internal/util"
+	"github.com/charmbracelet/log"
 	"github.com/kevinburke/ssh_config"
 	"github.com/skeema/knownhosts"
 	"golang.org/x/crypto/ssh"
@@ -35,10 +36,22 @@ func NewSSHExecutor(target string) (Executor, error) {
 		return nil, err
 	}
 
+	if util.IsSSHDebugEnabled() {
+		log.Debugf("Connecting to %s@%s", conf.User, host)
+	}
+
 	// Connect to host
 	client, err := ssh.Dial("tcp", host, conf)
 	if err != nil {
+		// Enhance error message with more context
+		if strings.Contains(err.Error(), "unable to authenticate") {
+			return nil, fmt.Errorf("SSH authentication failed for %s@%s: %v\n\nPossible causes:\n  - SSH keys are not in the server's authorized_keys file for user %s\n  - Keys are encrypted and require a passphrase (not supported)\n  - Server only accepts specific key types\n\nRun with -v to see which keys were attempted", conf.User, host, err, conf.User)
+		}
 		return nil, err
+	}
+
+	if util.IsSSHDebugEnabled() {
+		log.Debugf("Successfully connected to %s@%s", conf.User, host)
 	}
 
 	return &sshExecutor{client}, nil
@@ -260,7 +273,8 @@ func configFromTarget(target string) (string, *ssh.ClientConfig, error) {
 	}
 
 	// Add password callback
-	if term.IsTerminal(int(os.Stdin.Fd())) {
+	isTerminal := term.IsTerminal(int(os.Stdin.Fd()))
+	if isTerminal {
 		config.Auth = append(
 			config.Auth,
 			ssh.PasswordCallback(func() (string, error) {
@@ -272,6 +286,38 @@ func configFromTarget(target string) (string, *ssh.ClientConfig, error) {
 				return string(password), nil
 			}),
 		)
+	}
+
+	// Validate that we have at least one authentication method
+	// Pre-check if public keys are available when password auth is not available
+	if !isTerminal && len(config.Auth) == 1 {
+		// Only have public key auth and no terminal, check if keys are actually available
+		settings := ssh_config.DefaultUserSettings
+		identitiesOnly := false
+		if ionly := settings.Get(host, "IdentitiesOnly"); ionly == "yes" {
+			identitiesOnly = true
+		}
+		identityFiles := getIdentityFiles(settings, host)
+		agentPath := getAgentPath(settings, host)
+
+		// Try to load keys to see if any are available
+		keys := []ssh.Signer{}
+		if !identitiesOnly {
+			agentKeys, err := loadAgentKeys(agentPath)
+			if err == nil && agentKeys != nil {
+				keys = append(keys, agentKeys...)
+			}
+		}
+		for _, path := range identityFiles {
+			key, err := loadPrivateKeyFromFS(path)
+			if err == nil && key != nil {
+				keys = append(keys, key)
+			}
+		}
+
+		if len(keys) == 0 {
+			return "", nil, fmt.Errorf("no SSH keys found for %s@%s (checked SSH agent and identity files) and password authentication is not available in non-terminal context. Please ensure SSH keys are available or run in a terminal", config.User, host)
+		}
 	}
 
 	return fmt.Sprintf("%s:%s", host, port), config, nil
@@ -308,9 +354,8 @@ func buildDefaultConfig(host, port string) (*ssh.ClientConfig, error) {
 	)
 
 	// Get known hosts file
-	kh, err := knownhosts.New(
-		getKnownHostsFiles(settings, host)...,
-	)
+	knownHostsFiles := getKnownHostsFiles(settings, host)
+	kh, err := knownhosts.New(knownHostsFiles...)
 	if err == nil {
 		conf.HostKeyCallback = kh.HostKeyCallback()
 		conf.HostKeyAlgorithms = kh.HostKeyAlgorithms(fmt.Sprintf("%s:%s", host, port))
@@ -355,13 +400,14 @@ func configPath(p string) string {
 func getIdentityFiles(settings *ssh_config.UserSettings, host string) []string {
 	files := []string{}
 
-	for _, f := range settings.GetAll(host, "IdentityFile") {
-		files = append(files, resolvePath(f))
+	configFiles := settings.GetAll(host, "IdentityFile")
+	for _, f := range configFiles {
+		resolved := resolvePath(f)
+		files = append(files, resolved)
 	}
 
 	// Default paths to check
-	files = append(
-		files,
+	defaultFiles := []string{
 		configPath("id_dsa"),
 		configPath("id_ecdsa"),
 		configPath("id_ecdsa_sk"),
@@ -369,7 +415,8 @@ func getIdentityFiles(settings *ssh_config.UserSettings, host string) []string {
 		configPath("id_ed25519_sk"),
 		configPath("id_xmsshost"),
 		configPath("id_rsa"),
-	)
+	}
+	files = append(files, defaultFiles...)
 
 	return files
 }
@@ -387,6 +434,10 @@ func getAgentPath(settings *ssh_config.UserSettings, host string) string {
 }
 
 func loadAgentKeys(agentPath string) ([]ssh.Signer, error) {
+	if agentPath == "" {
+		return nil, nil
+	}
+
 	conn, err := net.Dial("unix", agentPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -400,9 +451,13 @@ func loadAgentKeys(agentPath string) ([]ssh.Signer, error) {
 	}
 	o := []ssh.Signer{}
 	for _, s := range signers {
+		// Test if key can sign (some agents require user interaction)
 		_, err := s.Sign(rand.Reader, []byte(""))
-		if err == nil {
-			o = append(o, s)
+		// Include the key anyway - the sign test might be too strict for some agents
+		// The SSH library will handle authentication failures gracefully
+		o = append(o, s)
+		if err != nil && util.IsSSHDebugEnabled() {
+			log.Debugf("SSH agent: key type %s failed sign test but will try during auth", s.PublicKey().Type())
 		}
 	}
 	return o, nil
@@ -418,6 +473,10 @@ func loadPrivateKeyFromFS(path string) (ssh.Signer, error) {
 	}
 	signer, err := ssh.ParsePrivateKey(privateKey)
 	if err != nil {
+		// Check if it's an encrypted key
+		if _, ok := err.(*ssh.PassphraseMissingError); ok {
+			return nil, fmt.Errorf("encrypted key %s requires passphrase (not supported)", path)
+		}
 		return nil, err
 	}
 	return signer, nil
@@ -426,17 +485,25 @@ func loadPrivateKeyFromFS(path string) (ssh.Signer, error) {
 func newPublicKeysCallback(identitiesOnly bool, agentPath string, identityFiles []string) func() ([]ssh.Signer, error) {
 	return func() ([]ssh.Signer, error) {
 		keys := []ssh.Signer{}
+		keyTypes := []string{}
 		if !identitiesOnly {
 			agentKeys, err := loadAgentKeys(agentPath)
 			if err == nil && agentKeys != nil {
 				keys = append(keys, agentKeys...)
+				for _, k := range agentKeys {
+					keyTypes = append(keyTypes, k.PublicKey().Type())
+				}
 			}
 		}
 		for _, path := range identityFiles {
 			key, err := loadPrivateKeyFromFS(path)
 			if err == nil && key != nil {
 				keys = append(keys, key)
+				keyTypes = append(keyTypes, key.PublicKey().Type())
 			}
+		}
+		if len(keys) > 0 && util.IsSSHDebugEnabled() {
+			log.Debugf("SSH authentication: %d key(s) available (types: %s)", len(keys), strings.Join(keyTypes, ", "))
 		}
 		return keys, nil
 	}

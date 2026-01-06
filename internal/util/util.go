@@ -108,13 +108,36 @@ func SelfElevate() error {
 	return syscall.Exec(spath, args, os.Environ())
 }
 
-func InitLogger(verbose bool) {
+var verbosityLevel int
+
+// CountVerboseFlags counts the number of -v flags in os.Args
+func CountVerboseFlags(args []string) int {
+	count := 0
+	for _, arg := range args {
+		if arg == "-v" || arg == "--verbose" {
+			count++
+		} else if strings.HasPrefix(arg, "-v") {
+			// Count consecutive v's (e.g., -vv, -vvv)
+			for _, r := range arg[1:] {
+				if r == 'v' {
+					count++
+				} else {
+					break
+				}
+			}
+		}
+	}
+	return count
+}
+
+func InitLogger(verboseCount int) {
+	verbosityLevel = verboseCount
 	// Disable timestamp
 	log.SetReportTimestamp(false)
 
 	// Default to info
 	log.SetLevel(log.InfoLevel)
-	if verbose {
+	if verboseCount > 0 {
 		log.SetLevel(log.DebugLevel)
 	}
 
@@ -125,6 +148,11 @@ func InitLogger(verbose bool) {
 	styles.Levels[log.WarnLevel] = levelStyle(log.WarnLevel, lipgloss.Color("3"))
 	styles.Levels[log.InfoLevel] = levelStyle(log.InfoLevel, lipgloss.Color("4"))
 	log.SetStyles(styles)
+}
+
+// IsSSHDebugEnabled returns true if verbosity is 2 or higher (-vv)
+func IsSSHDebugEnabled() bool {
+	return verbosityLevel >= 2
 }
 
 func levelStyle(level log.Level, color lipgloss.TerminalColor) lipgloss.Style {
