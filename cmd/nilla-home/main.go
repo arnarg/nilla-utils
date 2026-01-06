@@ -24,6 +24,8 @@ var version = "unknown"
 
 var description = `[name]  Name of the home-manager system to build. If left empty it will try "$USER@<hostname>" and "$USER".`
 
+var verboseCount int
+
 type subCmd int
 
 const (
@@ -44,11 +46,12 @@ func actionFuncFor(sub subCmd) cli.ActionFunc {
 }
 
 var app = &cli.Command{
-	Name:            "nilla-home",
-	Version:         version,
-	Usage:           "A nilla cli plugin to work with home-manager configurations.",
-	HideVersion:     true,
-	HideHelpCommand: true,
+	Name:                 "nilla-home",
+	Version:              version,
+	Usage:                "A nilla cli plugin to work with home-manager configurations.",
+	HideVersion:          true,
+	HideHelpCommand:      true,
+	UseShortOptionHandling: true,
 	Flags: []cli.Flag{
 		&cli.BoolFlag{
 			Name:        "version",
@@ -60,8 +63,11 @@ var app = &cli.Command{
 		&cli.BoolFlag{
 			Name:        "verbose",
 			Aliases:     []string{"v"},
-			Usage:       "Set log level to verbose",
+			Usage:       "Set log level to verbose (pass multiple times, e.g. -vv for SSH debug)",
 			HideDefault: true,
+			Config: cli.BoolConfig{
+				Count: &verboseCount,
+			},
 		},
 		&cli.BoolFlag{
 			Name:  "raw",
@@ -215,7 +221,7 @@ func findHomeConfiguration(p string, names []string) (string, error) {
 
 func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	// Setup logger
-	util.InitLogger(cmd.Bool("verbose"))
+	util.InitLogger(verboseCount)
 
 	// Resolve project
 	source, err := project.Resolve(cmd.String("project"))
@@ -352,7 +358,7 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 func listConfigurations(ctx context.Context, cmd *cli.Command) error {
 	// Setup logger
-	util.InitLogger(cmd.Bool("verbose"))
+	util.InitLogger(verboseCount)
 
 	// Resolve project
 	source, err := project.Resolve(cmd.String("project"))
