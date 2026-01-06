@@ -3,12 +3,14 @@ package nix
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/arnarg/nilla-utils/internal/exec"
+	"github.com/charmbracelet/log"
 	"github.com/sourcegraph/conc/pool"
 )
 
@@ -72,6 +74,9 @@ func (c NixCommand) Run(ctx context.Context) ([]byte, error) {
 		args = append(args, "--print-out-paths")
 	}
 
+	// Debug: log the full command being executed
+	log.Debugf("Executing: %s %s", cmd, fmt.Sprintf("%v", args))
+
 	if c.reporter != nil {
 		return c.runWithReporter(ctx, cmd, args)
 	}
@@ -100,7 +105,8 @@ func (c NixCommand) runStdout(ctx context.Context, cmd string, args []string) ([
 
 	// Run nix command
 	if err := nixc.Run(); err != nil {
-		return nil, err
+		log.Debugf("Nix command failed: %v", err)
+		return nil, fmt.Errorf("nix command failed: %w", err)
 	}
 
 	return bytes.TrimSpace(b.Bytes()), nil
@@ -136,7 +142,8 @@ func (c NixCommand) runWithReporter(ctx context.Context, cmd string, args []stri
 
 	// Start nix command
 	if err = nixc.Start(); err != nil {
-		return nil, err
+		log.Debugf("Failed to start nix command: %v", err)
+		return nil, fmt.Errorf("failed to start nix command: %w", err)
 	}
 
 	// Create a goroutine pool
@@ -156,7 +163,8 @@ func (c NixCommand) runWithReporter(ctx context.Context, cmd string, args []stri
 
 	// Wait for pool
 	if err := p.Wait(); err != nil {
-		return nil, err
+		log.Debugf("Nix command failed: %v", err)
+		return nil, fmt.Errorf("nix command failed: %w", err)
 	}
 
 	return bytes.TrimSpace(b.Bytes()), nil

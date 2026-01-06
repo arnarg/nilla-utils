@@ -1,6 +1,9 @@
 package util
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestConvertBytes(t *testing.T) {
 	tests := []struct {
@@ -101,6 +104,109 @@ func TestConvertBytesToUnit(t *testing.T) {
 
 			if out != tt.outAmount {
 				t.Errorf("converted amount is '%f' but '%f' was expected", out, tt.outAmount)
+			}
+		})
+	}
+}
+
+func TestParseTarget(t *testing.T) {
+	tests := []struct {
+		name         string
+		target       string
+		expectedUser string
+		expectedHost string
+	}{
+		{
+			name:         "host only",
+			target:       "hostname",
+			expectedUser: "",
+			expectedHost: "hostname",
+		},
+		{
+			name:         "user and host",
+			target:       "user@hostname",
+			expectedUser: "user",
+			expectedHost: "hostname",
+		},
+		{
+			name:         "root and host",
+			target:       "root@hostname",
+			expectedUser: "root",
+			expectedHost: "hostname",
+		},
+		{
+			name:         "host with domain",
+			target:       "hostname.example.com",
+			expectedUser: "",
+			expectedHost: "hostname.example.com",
+		},
+		{
+			name:         "user and host with domain",
+			target:       "user@hostname.example.com",
+			expectedUser: "user",
+			expectedHost: "hostname.example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			user, hostname := ParseTarget(tt.target)
+
+			if user != tt.expectedUser {
+				t.Errorf("expected user '%s', got '%s'", tt.expectedUser, user)
+			}
+			if hostname != tt.expectedHost {
+				t.Errorf("expected hostname '%s', got '%s'", tt.expectedHost, hostname)
+			}
+		})
+	}
+}
+
+func TestBuildStoreAddress(t *testing.T) {
+	tests := []struct {
+		name           string
+		user           string
+		hostname       string
+		expectedOutput string
+	}{
+		{
+			name:           "user and hostname",
+			user:           "user",
+			hostname:       "hostname",
+			expectedOutput: "ssh-ng://user@hostname",
+		},
+		{
+			name:           "empty user defaults to current user",
+			user:           "",
+			hostname:       "hostname",
+			expectedOutput: fmt.Sprintf("ssh-ng://%s@hostname", GetUser()),
+		},
+		{
+			name:           "root user",
+			user:           "root",
+			hostname:       "hostname",
+			expectedOutput: "ssh-ng://root@hostname",
+		},
+		{
+			name:           "hostname with domain",
+			user:           "user",
+			hostname:       "hostname.example.com",
+			expectedOutput: "ssh-ng://user@hostname.example.com",
+		},
+		{
+			name:           "empty user with domain",
+			user:           "",
+			hostname:       "hostname.example.com",
+			expectedOutput: fmt.Sprintf("ssh-ng://%s@hostname.example.com", GetUser()),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := BuildStoreAddress(tt.user, tt.hostname)
+
+			if result != tt.expectedOutput {
+				t.Errorf("expected '%s', got '%s'", tt.expectedOutput, result)
 			}
 		})
 	}

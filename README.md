@@ -10,25 +10,34 @@
 
 *   **Simplified NixOS & Home Manager Definitions:** Easily declare and manage your system configurations directly within Nilla.
 *   **Powerful Configuration Generators:** Automate the creation of Nilla inputs, packages, shells, overlays, and even full NixOS/Home Manager systems from your project's directory structure.
-*   **Convenient CLI Plugins:** Extend the `nilla` command-line tool with `nilla os` and `nilla home` subcommands for building, switching, and managing your NixOS and Home Manager generations, including diffing and remote deployment capabilities.
+*   **Convenient CLI Plugins:** Extend the `nilla` command-line tool with `nilla os` and `nilla home` subcommands for building, switching, and managing your NixOS and Home Manager generations, including diffing and remote build and deployment capabilities.
 
 # Table of contents
 
-- [Quickstart](#quickstart)
-- [NixOS](#nixos)
-- [Home Manager](#home-manager)
-- [Nilla cli plugins](#nilla-cli-plugins)
-- [Generators](#generators)
-  - [Inputs](#inputs)
-  - [Project](#project)
-  - [Packages](#packages)
-  - [Shells](#shells)
-  - [Overlays](#overlays)
-  - [NixOS](#nixos-2)
-  - [Home Manager](#home-manager-2)
-  - [NixOS Modules](#nixos-modules)
-  - [Home Manager Modules](#home-manager-modules)
-- [Examples](#examples)
+- [Table of contents](#table-of-contents)
+  - [Quickstart](#quickstart)
+  - [NixOS](#nixos)
+  - [Home Manager](#home-manager)
+  - [Nilla cli plugins](#nilla-cli-plugins)
+    - [NixOS](#nixos-1)
+    - [Home Manager](#home-manager-1)
+    - [Using the CLI Plugins](#using-the-cli-plugins)
+      - [NixOS (`nilla os`)](#nixos-nilla-os)
+      - [Home Manager (`nilla home`)](#home-manager-nilla-home)
+  - [Generators](#generators)
+    - [Inputs](#inputs)
+    - [Project](#project)
+    - [Packages](#packages)
+    - [Shells](#shells)
+    - [Overlays](#overlays)
+    - [NixOS](#nixos-2)
+    - [Home Manager](#home-manager-2)
+    - [NixOS Modules](#nixos-modules)
+    - [Home Manager Modules](#home-manager-modules)
+  - [Examples](#examples)
+  - [Contributing](#contributing)
+  - [Kudos](#kudos)
+  - [License](#license)
 
 ## Quickstart
 
@@ -162,6 +171,7 @@ To install the plugins the following can be added to your NixOS or home-manager 
   ];
 }
 ```
+
 ### Using the CLI Plugins
 
 Once installed, you can use the following commands:
@@ -173,12 +183,21 @@ For managing NixOS systems defined in `systems.nixos`.
 *   **Build a configuration:**
     ```sh
     nilla os build <system_name>
+    # Build on remote host:
+    # nilla os build <system_name> --build-on user@hostname
+    # Build on same host as target:
+    # nilla os build <system_name> --target user@hostname --build-on-target
     ```
+
 *   **Build and switch to a configuration:**
     ```sh
     nilla os switch <system_name>
     # For remote targets:
     # nilla os switch <system_name> --target user@hostname
+    # Build on remote, deploy to different host:
+    # nilla os switch <system_name> --build-on user@builder --target user@hostname
+    # Build and deploy to same host:
+    # nilla os switch <system_name> --target user@hostname --build-on-target
     ```
 *   **Test a configuration:**
     ```sh
@@ -206,10 +225,20 @@ For managing Home Manager configurations defined in `systems.home`.
 *   **Build a configuration:**
     ```sh
     nilla home build <user@system_name>
+    # Build on remote host:
+    # nilla home build <user@system_name> --build-on user@hostname
+    # Build on same host as target:
+    # nilla home build <user@system_name> --target user@hostname --build-on-target
     ```
 *   **Build and switch to a configuration:**
     ```sh
     nilla home switch <user@system_name>
+    # For remote targets:
+    # nilla home switch <user@system_name> --target user@hostname
+    # Build on remote, deploy to different host:
+    # nilla home switch <user@system_name> --build-on user@builder --target user@hostname
+    # Build and deploy to same host:
+    # nilla home switch <user@system_name> --target user@hostname --build-on-target
     ```
 *   **List available Home Manager configurations:**
     ```sh
@@ -342,7 +371,6 @@ in nilla.create ({config}: {
 ```
 
 Now `nilla build mypackage` will build the package in `./packages/mypackage/default.nix`.
-
 
 ### Shells
 
@@ -634,6 +662,10 @@ You can find more detailed examples of how to use `nilla-utils` in the [`example
 ## Contributing
 
 Contributions are welcome! Please feel free to open an issue or submit a pull request.
+
+## Kudos
+
+The remote build functionality was inspired by [deploy-rs](https://github.com/serokell/deploy-rs). Thanks to the deploy-rs team for the excellent work and for sharing their approach to remote Nix builds.
 
 ## License
 

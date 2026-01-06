@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/arnarg/nilla-utils/internal/diff"
 	"github.com/arnarg/nilla-utils/internal/exec"
@@ -73,6 +74,19 @@ var app = &cli.Command{
 			Usage:   "The nilla project to use",
 			Value:   "./",
 		},
+		&cli.StringFlag{
+			Name:    "target",
+			Aliases: []string{"t"},
+			Usage:   "Target host to deploy/activate on (for switch/test/boot commands). Can also be used with --build-on-target for builds.",
+		},
+		&cli.StringFlag{
+			Name:  "build-on",
+			Usage: "Build on the specified host instead of locally. Dependencies are fetched from target's substituters.",
+		},
+		&cli.BoolFlag{
+			Name:  "build-on-target",
+			Usage: "Build on the same host as specified by --target (requires --target flag). Dependencies are fetched from target's substituters.",
+		},
 	},
 	Commands: []*cli.Command{
 		// Build
@@ -111,11 +125,6 @@ var app = &cli.Command{
 					Aliases: []string{"c"},
 					Usage:   "Do not ask for confirmation",
 				},
-				&cli.StringFlag{
-					Name:    "target",
-					Aliases: []string{"t"},
-					Usage:   "Target host to update",
-				},
 			},
 			Action: actionFuncFor(subCmdTest),
 		},
@@ -132,11 +141,6 @@ var app = &cli.Command{
 					Aliases: []string{"c"},
 					Usage:   "Do not ask for confirmation",
 				},
-				&cli.StringFlag{
-					Name:    "target",
-					Aliases: []string{"t"},
-					Usage:   "Target host to update",
-				},
 			},
 			Action: actionFuncFor(subCmdBoot),
 		},
@@ -152,11 +156,6 @@ var app = &cli.Command{
 					Name:    "confirm",
 					Aliases: []string{"c"},
 					Usage:   "Do not ask for confirmation",
-				},
-				&cli.StringFlag{
-					Name:    "target",
-					Aliases: []string{"t"},
-					Usage:   "Target host to update",
 				},
 			},
 			Action: actionFuncFor(subCmdSwitch),
@@ -272,6 +271,25 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 	log.Infof("Found system \"%s\"", name)
 
+	// Determine build location
+	var buildTarget string
+	if cmd.String("build-on") != "" {
+		buildTarget = cmd.String("build-on")
+	} else if cmd.Bool("build-on-target") {
+		buildTarget = cmd.String("target")
+		if buildTarget == "" {
+			return fmt.Errorf("--build-on-target requires --target to be specified")
+		}
+	}
+
+	// Validate and prepare remote build if enabled
+	var storeAddress string
+	if buildTarget != "" {
+		user, hostname := util.ParseTarget(buildTarget)
+		storeAddress = util.BuildStoreAddress(user, hostname)
+		log.Debugf("Remote build enabled, target: %s, store: %s", buildTarget, storeAddress)
+	}
+
 	//
 	// NixOS configuration build
 	//
@@ -292,6 +310,49 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		nargs = append(nargs, "--no-link")
 	}
 
+	// Handle remote builds
+	if buildTarget != "" && storeAddress != "" {
+		// First, get the derivation path by evaluating the attribute
+		// We use nix eval to get the derivation path
+		printSection("Getting derivation path")
+		derivationAttr := fmt.Sprintf("%s.drvPath", attr)
+		evalArgs := []string{
+			"-f", source.FullNillaPath(),
+			derivationAttr,
+			"--raw",
+		}
+		evalCmd := nix.Command("eval").
+			Args(evalArgs).
+			Executor(builder)
+		derivationPath, err := evalCmd.Run(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get derivation path: %w", err)
+		}
+		derivationPathStr := strings.TrimSpace(string(derivationPath))
+
+		// Copy derivation to remote host
+		printSection("Copying derivation to remote host")
+		copyArgs := []string{
+			"--to", storeAddress,
+			"--derivation",
+			"-s", // fetch dependencies from target system's substituters
+			derivationPathStr,
+		}
+		copyCmd := nix.Command("copy").
+			Args(copyArgs).
+			Executor(builder)
+		if _, err := copyCmd.Run(ctx); err != nil {
+			return fmt.Errorf("failed to copy derivation to remote: %w", err)
+		}
+
+		// Add remote build flags
+		nargs = append(nargs, "--store", storeAddress)
+		nargs = append(nargs, "--eval-store", "auto")
+	}
+
+	// Debug: log the nix build arguments
+	log.Debugf("Nix build arguments: %v", nargs)
+
 	// Run nix build
 	printSection("Building configuration")
 	nixBuildCmd := nix.Command("build").
@@ -304,17 +365,22 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 	out, err := nixBuildCmd.Run(ctx)
 	if err != nil {
-		return err
+		log.Debugf("Nix build command failed with error: %v", err)
+		return fmt.Errorf("failed to build configuration: %w", err)
 	}
+	log.Debugf("Build completed successfully, output path: %s", string(out))
 
 	//
-	// Setup target executor
+	// Setup target executor (for deployment)
 	//
 	if cmd.String("target") != "" {
+		log.Debugf("Setting up SSH executor for target: %s", cmd.String("target"))
 		target, err = exec.NewSSHExecutor(cmd.String("target"))
 		if err != nil {
-			return err
+			log.Debugf("Failed to create SSH executor: %v", err)
+			return fmt.Errorf("failed to create SSH executor: %w", err)
 		}
+		log.Debugf("SSH executor created successfully")
 	} else {
 		target = builder
 	}
@@ -325,6 +391,29 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	fmt.Fprintln(os.Stderr)
 	printSection("Comparing changes")
 
+	// If we built remotely, use remote executor for the new build (faster - no copy needed)
+	// Otherwise, use local executor for the new build
+	newBuildExecutor := builder
+	if buildTarget != "" && storeAddress != "" {
+		// If build target is same as deploy target, use deploy executor
+		// Otherwise, create a separate executor for the build target
+		if buildTarget == cmd.String("target") && cmd.String("target") != "" {
+			log.Debugf("Using remote executor for diff (both generations on remote, same as deploy target)")
+			newBuildExecutor = target
+		} else {
+			log.Debugf("Setting up SSH executor for build target: %s", buildTarget)
+			buildTargetExecutor, err := exec.NewSSHExecutor(buildTarget)
+			if err != nil {
+				log.Debugf("Failed to create SSH executor for build target: %v", err)
+				return fmt.Errorf("failed to create SSH executor for build target: %w", err)
+			}
+			log.Debugf("Using remote executor for diff (new build on remote build target)")
+			newBuildExecutor = buildTargetExecutor
+		}
+	}
+
+	log.Debugf("Running diff: current=%s (executor=%T), new=%s (executor=%T)", CURRENT_PROFILE, target, string(out), newBuildExecutor)
+
 	if err := diff.Execute(
 		&diff.Generation{
 			Path:     CURRENT_PROFILE,
@@ -332,11 +421,13 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		},
 		&diff.Generation{
 			Path:     string(out),
-			Executor: builder,
+			Executor: newBuildExecutor,
 		},
 	); err != nil {
-		return err
+		log.Debugf("Diff execution failed with error: %v", err)
+		return fmt.Errorf("failed to compare changes: %w", err)
 	}
+	log.Debugf("Diff execution completed successfully")
 
 	// Build can exit now
 	if sc == subCmdBuild {
@@ -360,15 +451,30 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	// Copy closure to target
 	//
 	if cmd.String("target") != "" {
+		// Skip copy if we built remotely on the same host as the deploy target
+		if buildTarget != "" && buildTarget == cmd.String("target") {
+			log.Debugf("Skipping copy: build and deploy are on the same host (%s)", buildTarget)
+		} else {
 		fmt.Fprintln(os.Stderr)
 		printSection("Copying system to target")
 
 		// Copy system closure
-		nixCopyCmd := nix.Command("copy").
-			Args([]string{
+			copyArgs := []string{
 				"--to", fmt.Sprintf("ssh://%s", cmd.String("target")),
-				string(out),
-			}).
+			}
+
+			// If we built remotely on a different host, copy from the build host
+			if buildTarget != "" && buildTarget != cmd.String("target") {
+				buildUser, buildHostname := util.ParseTarget(buildTarget)
+				buildStoreAddress := util.BuildStoreAddress(buildUser, buildHostname)
+				copyArgs = append(copyArgs, "--from", buildStoreAddress)
+				log.Debugf("Copying from build host %s to deploy target %s", buildTarget, cmd.String("target"))
+			}
+
+			copyArgs = append(copyArgs, string(out))
+
+			nixCopyCmd := nix.Command("copy").
+				Args(copyArgs).
 			Executor(builder)
 		if !cmd.Bool("raw") {
 			nixCopyCmd = nixCopyCmd.Reporter(tui.NewCopyReporter(cmd.Bool("verbose")))
@@ -376,6 +482,7 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		_, err := nixCopyCmd.Run(ctx)
 		if err != nil {
 			return err
+			}
 		}
 	}
 

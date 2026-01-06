@@ -204,13 +204,13 @@ func Run(from, to *Generation) (*Diff, *ClosureDiff, error) {
 	// Query before
 	beforePaths, err := queryGeneration(from.Path, from.Executor)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to query from generation: %w", err)
 	}
 
 	// Query after
 	afterPaths, err := queryGeneration(to.Path, to.Executor)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to query to generation: %w", err)
 	}
 
 	// Parse paths
@@ -229,13 +229,13 @@ func Run(from, to *Generation) (*Diff, *ClosureDiff, error) {
 	// Get closure size from before
 	closure.BytesBefore, err = getClosureSize(from.Executor, from.Path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to get closure size for from generation: %w", err)
 	}
 
 	// Get closure size from after
 	closure.BytesAfter, err = getClosureSize(to.Executor, to.Path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to get closure size for to generation: %w", err)
 	}
 
 	return &diff, closure, nil
@@ -246,19 +246,27 @@ func queryGeneration(path string, executor exec.Executor) ([]string, error) {
 
 	swPath := path + "/sw"
 
-	// Check if /sw exists
+	// Check if /sw exists and is accessible
 	swExists, err := executor.PathExists(swPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to check if %s exists: %w", swPath, err)
 	}
 	if !swExists {
 		swPath = path
+	} else {
+		// /sw exists, but verify it's a valid symlink/path before using it
+		// Try to query it first, and if it fails, fall back to using path directly
+		_, testErr := runNixStoreOutput(executor, "--query", "--references", swPath)
+		if testErr != nil {
+			// /sw exists but can't be queried (might be broken symlink), use path directly
+			swPath = path
+		}
 	}
 
 	// Query references
 	refs, err := runNixStoreOutput(executor, "--query", "--references", swPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query references for %s: %w", swPath, err)
 	}
 
 	paths = append(paths, strings.Split(string(refs), "\n")...)
@@ -266,7 +274,7 @@ func queryGeneration(path string, executor exec.Executor) ([]string, error) {
 	// Query requisites
 	reqs, err := runNixStoreOutput(executor, "--query", "--requisites", path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query requisites for %s: %w", path, err)
 	}
 
 	paths = append(paths, strings.Split(string(reqs), "\n")...)
@@ -281,13 +289,13 @@ func runNixStoreOutput(executor exec.Executor, args ...string) ([]byte, error) {
 	// Create command from executor
 	cmd, err := executor.Command("nix-store", args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create nix-store command: %w", err)
 	}
 	cmd.SetStdout(buf)
 
 	// Run command
 	if err := cmd.Run(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("nix-store command failed: %w", err)
 	}
 
 	return buf.Bytes(), nil
@@ -300,13 +308,13 @@ func getClosureSize(executor exec.Executor, path string) (int64, error) {
 	// Create command from executor
 	cmd, err := executor.Command("nix", "path-info", "--json", "--closure-size", path)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to create nix path-info command: %w", err)
 	}
 	cmd.SetStdout(buf)
 
 	// Run command
 	if err := cmd.Run(); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("nix path-info command failed: %w", err)
 	}
 
 	// Parse path-info output
@@ -534,6 +542,7 @@ func Print(diff *Diff) {
 }
 
 func Execute(from, to *Generation) error {
+	// Debug logging
 	preferNvd := os.Getenv("NILLA_UTILS_DIFF") == "nvd"
 
 	// Just execute nvd diff if both are local, for now

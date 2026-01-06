@@ -11,72 +11,117 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/arnarg/nilla-utils/internal/exec"
 	"github.com/arnarg/nilla-utils/internal/util"
 )
 
-func CurrentHomeGeneration() (*HomeGeneration, error) {
-	// Check in /nix/var/nix/profiles
-	if user := util.GetUser(); user != "" {
-		perUser := fmt.Sprintf("/nix/var/nix/profiles/per-user/%s", user)
-		gen, err := currentHomeGeneration(perUser)
-		if err != nil {
-			return nil, err
-		}
-		if gen != nil {
-			return gen, nil
-		}
-	}
 
-	// Check ~/.local/state/nix/profiles
-	if home := util.GetHomeDir(); home != "" {
-		homeProfile := fmt.Sprintf("%s/.local/state/nix/profiles", home)
-		gen, err := currentHomeGeneration(homeProfile)
-		if err != nil {
-			return nil, err
-		}
-		if gen != nil {
-			return gen, nil
-		}
+// localHomeProfileDirs returns the list of profile directories to check for local operations.
+func localHomeProfileDirs() []string {
+	var dirs []string
+	if user := util.GetUser(); user != "" {
+		dirs = append(dirs, fmt.Sprintf("/nix/var/nix/profiles/per-user/%s", user))
 	}
-	return nil, errors.New("current generation not found")
+	if home := util.GetHomeDir(); home != "" {
+		dirs = append(dirs, fmt.Sprintf("%s/.local/state/nix/profiles", home))
+	}
+	return dirs
 }
 
-func currentHomeGeneration(dir string) (*HomeGeneration, error) {
-	p := fmt.Sprintf("%s/home-manager", dir)
+// homeProfileDirsFor returns the list of profile directories to check for executor-aware operations.
+func homeProfileDirsFor(user string, homeResolver homeDirResolver) ([]string, error) {
+	var dirs []string
+	if user != "" {
+		dirs = append(dirs, fmt.Sprintf("/nix/var/nix/profiles/per-user/%s", user))
+	}
+	homeDir, err := homeResolver.getHomeDir(user)
+	if err == nil && homeDir != "" {
+		dirs = append(dirs, fmt.Sprintf("%s/.local/state/nix/profiles", homeDir))
+	}
+	return dirs, nil
+}
 
-	// Check if it home-manager link exists
-	info, err := os.Stat(p)
+// findCurrentHomeGenerationPath is the shared helper that finds the current Home Manager generation path.
+// It checks both /nix/var/nix/profiles/per-user/<user> and ~/.local/state/nix/profiles locations.
+func findCurrentHomeGenerationPath(user string, homeResolver homeDirResolver, linkReader linkReader) (string, error) {
+	dirs, err := homeProfileDirsFor(user, homeResolver)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
+		return "", err
+	}
+
+	for _, dir := range dirs {
+		homeManagerLink := fmt.Sprintf("%s/home-manager", dir)
+		exists, err := linkReader.pathExists(homeManagerLink)
+		if err != nil {
+			continue
 		}
-		return nil, err
-	}
-	if info.Mode()&fs.ModeSymlink != 0 {
-		return nil, errors.New("main home-manager profile not symlink")
+		if exists {
+			linkName, err := linkReader.readLink(homeManagerLink)
+			if err == nil {
+				return fmt.Sprintf("%s/%s", dir, linkName), nil
+			}
+		}
 	}
 
-	// Resolve link
-	res, err := os.Readlink(p)
+	return "", errors.New("current generation not found")
+}
+
+// CurrentHomeGeneration returns the current Home Manager generation using local filesystem operations.
+func CurrentHomeGeneration() (*HomeGeneration, error) {
+	user := util.GetUser()
+	homeResolver := &localHomeDirResolver{}
+	linkReader := &localLinkReader{}
+
+	path, err := findCurrentHomeGenerationPath(user, homeResolver, linkReader)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get file info on resolved link
-	absp, err := filepath.Abs(fmt.Sprintf("%s/%s", dir, res))
+	// Convert path to HomeGeneration struct
+	return pathToHomeGeneration(path)
+}
+
+// CurrentHomeGenerationPath queries the current Home Manager generation path using the given executor.
+// If username is provided, it will be used to query the remote home directory.
+// It returns the path and true if found, or empty string and false if not found.
+func CurrentHomeGenerationPath(e exec.Executor, username string) (string, bool) {
+	user := username
+	if user == "" {
+		user = util.GetUser()
+	}
+
+	var homeResolver homeDirResolver
+	var linkReader linkReader
+
+	if e.IsLocal() {
+		homeResolver = &localHomeDirResolver{}
+		linkReader = &localLinkReader{}
+	} else {
+		homeResolver = &remoteHomeDirResolver{executor: e}
+		linkReader = &remoteLinkReader{executor: e}
+	}
+
+	path, err := findCurrentHomeGenerationPath(user, homeResolver, linkReader)
+	if err != nil {
+		return "", false
+	}
+
+	return path, true
+}
+
+// pathToHomeGeneration converts a generation path string to a HomeGeneration struct.
+// This is used for local operations where we need the full struct with metadata.
+func pathToHomeGeneration(path string) (*HomeGeneration, error) {
+	// Extract directory from path
+	dir := filepath.Dir(path)
+
+	// Get file info
+	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
 
-	linfo, err := os.Stat(absp)
-	if err != nil {
-		return nil, err
-	}
-	if linfo.Mode()&fs.ModeSymlink != 0 {
-		return nil, errors.New("resolved home-manager profile not symlink")
-	}
-
-	return NewHomeGeneration(filepath.Dir(absp), linfo)
+	return NewHomeGeneration(dir, info)
 }
 
 type HomeGeneration struct {
@@ -130,22 +175,9 @@ func (g *HomeGeneration) Path() string {
 }
 
 func ListHomeGenerations() ([]*HomeGeneration, error) {
-	// Check in /nix/var/nix/profiles
-	if user := util.GetUser(); user != "" {
-		perUser := fmt.Sprintf("/nix/var/nix/profiles/per-user/%s", user)
-		gens, err := listHomeGenerations(perUser)
-		if err != nil {
-			return nil, err
-		}
-		if len(gens) > 0 {
-			return gens, nil
-		}
-	}
-
-	// Check ~/.local/state/nix/profiles
-	if home := util.GetHomeDir(); home != "" {
-		homeProfile := fmt.Sprintf("%s/.local/state/nix/profiles", home)
-		gens, err := listHomeGenerations(homeProfile)
+	dirs := localHomeProfileDirs()
+	for _, dir := range dirs {
+		gens, err := listHomeGenerations(dir)
 		if err != nil {
 			return nil, err
 		}
