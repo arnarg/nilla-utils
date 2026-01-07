@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/arnarg/nilla-utils/internal/exec"
+	"github.com/arnarg/nilla-utils/internal/util"
 	"github.com/charmbracelet/log"
 	"github.com/sourcegraph/conc/pool"
 )
@@ -168,4 +169,47 @@ func (c NixCommand) runWithReporter(ctx context.Context, cmd string, args []stri
 	}
 
 	return bytes.TrimSpace(b.Bytes()), nil
+}
+
+// CopyToTarget copies a Nix store path to a target host.
+// If buildTarget is provided and different from target, copies from buildTarget.
+// If buildTarget equals target, skips copy (already on target).
+// If useReporter is true and reporter is provided, uses a progress reporter for the copy operation.
+func CopyToTarget(ctx context.Context, builder exec.Executor, outPath, target, buildTarget string, useReporter bool, reporter ProgressReporter) error {
+	// Skip copy if we built remotely on the same host as the deploy target
+	if buildTarget != "" && buildTarget == target {
+		log.Debugf("Skipping copy: build and deploy are on the same host (%s)", buildTarget)
+		return nil
+	}
+
+	// Copy closure
+	copyArgs := []string{
+		"--to", fmt.Sprintf("ssh://%s", target),
+	}
+
+	// If we built remotely on a different host, copy from the build host
+	if buildTarget != "" && buildTarget != target {
+		buildUser, buildHostname := util.ParseTarget(buildTarget)
+		buildStoreAddress := util.BuildStoreAddress(buildUser, buildHostname)
+		copyArgs = append(copyArgs, "--from", buildStoreAddress)
+		log.Debugf("Copying from build host %s to deploy target %s", buildTarget, target)
+	}
+
+	copyArgs = append(copyArgs, outPath)
+
+	copyCmd := Command("copy").
+		Args(copyArgs).
+		Executor(builder)
+
+	if useReporter && reporter != nil {
+		copyCmd = copyCmd.Reporter(reporter)
+	}
+
+	_, err := copyCmd.Run(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to copy to target: %w", err)
+	}
+
+	log.Debugf("Successfully copied to target")
+	return nil
 }
