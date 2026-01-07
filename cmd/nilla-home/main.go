@@ -46,11 +46,11 @@ func actionFuncFor(sub subCmd) cli.ActionFunc {
 }
 
 var app = &cli.Command{
-	Name:                 "nilla-home",
-	Version:              version,
-	Usage:                "A nilla cli plugin to work with home-manager configurations.",
-	HideVersion:          true,
-	HideHelpCommand:      true,
+	Name:                   "nilla-home",
+	Version:                version,
+	Usage:                  "A nilla cli plugin to work with home-manager configurations.",
+	HideVersion:            true,
+	HideHelpCommand:        true,
 	UseShortOptionHandling: true,
 	Flags: []cli.Flag{
 		&cli.BoolFlag{

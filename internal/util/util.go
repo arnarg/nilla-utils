@@ -110,26 +110,6 @@ func SelfElevate() error {
 
 var verbosityLevel int
 
-// CountVerboseFlags counts the number of -v flags in os.Args
-func CountVerboseFlags(args []string) int {
-	count := 0
-	for _, arg := range args {
-		if arg == "-v" || arg == "--verbose" {
-			count++
-		} else if strings.HasPrefix(arg, "-v") {
-			// Count consecutive v's (e.g., -vv, -vvv)
-			for _, r := range arg[1:] {
-				if r == 'v' {
-					count++
-				} else {
-					break
-				}
-			}
-		}
-	}
-	return count
-}
-
 func InitLogger(verboseCount int) {
 	verbosityLevel = verboseCount
 	// Disable timestamp
