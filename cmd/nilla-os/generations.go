@@ -5,11 +5,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
+	osexec "os/exec"
 	"slices"
 	"strconv"
 	"time"
 
+	"github.com/arnarg/nilla-utils/internal/exec"
 	"github.com/arnarg/nilla-utils/internal/generation"
 	"github.com/arnarg/nilla-utils/internal/tui"
 	"github.com/arnarg/nilla-utils/internal/util"
@@ -24,15 +25,36 @@ func sortGenerationsDesc(generations []*generation.NixOSGeneration) {
 	})
 }
 
+func setupExecutor(targetStr string) (exec.Executor, error) {
+	if targetStr == "" {
+		return nil, nil
+	}
+
+	executor, err := exec.NewSSHExecutor(targetStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup SSH executor for target %s: %w", targetStr, err)
+	}
+	return executor, nil
+}
+
 func listGenerations(ctx context.Context, cmd *cli.Command) error {
+	if err := util.ValidateArgs(cmd, 0); err != nil {
+		return err
+	}
+
+	executor, err := setupExecutor(cmd.String("target"))
+	if err != nil {
+		return err
+	}
+
 	// Get current generation
-	current, err := generation.CurrentNixOSGeneration()
+	current, err := generation.CurrentNixOSGeneration(executor)
 	if err != nil {
 		return err
 	}
 
 	// List all generations
-	generations, err := generation.ListNixOSGenerations()
+	generations, err := generation.ListNixOSGenerations(executor)
 	if err != nil {
 		return err
 	}
@@ -72,9 +94,20 @@ type genAction struct {
 }
 
 func cleanGenerations(ctx context.Context, cmd *cli.Command) error {
-	// We need to self-elevate if we're not root before continuing
-	if !util.IsRoot() {
-		return util.SelfElevate()
+	if err := util.ValidateArgs(cmd, 0); err != nil {
+		return err
+	}
+
+	executor, err := setupExecutor(cmd.String("target"))
+	if err != nil {
+		return err
+	}
+
+	if executor == nil {
+		// We need to self-elevate if we're not root before continuing (only for local)
+		if !util.IsRoot() {
+			return util.SelfElevate()
+		}
 	}
 
 	// Parse parameters
@@ -82,13 +115,13 @@ func cleanGenerations(ctx context.Context, cmd *cli.Command) error {
 	foundCurrent := false
 
 	// Get current generation
-	current, err := generation.CurrentNixOSGeneration()
+	current, err := generation.CurrentNixOSGeneration(executor)
 	if err != nil {
 		return err
 	}
 
 	// List all generations
-	generations, err := generation.ListNixOSGenerations()
+	generations, err := generation.ListNixOSGenerations(executor)
 	if err != nil {
 		return err
 	}
@@ -175,8 +208,8 @@ func cleanGenerations(ctx context.Context, cmd *cli.Command) error {
 	//
 	for _, action := range actions {
 		if !action.keep {
-			if err := action.generation.Delete(); err != nil {
-				return err
+			if err := action.generation.DeleteWithExecutor(executor); err != nil {
+				return fmt.Errorf("failed to delete generation %d: %w", action.generation.ID, err)
 			}
 		}
 	}
@@ -187,9 +220,27 @@ func cleanGenerations(ctx context.Context, cmd *cli.Command) error {
 	fmt.Fprintln(os.Stderr)
 	printSection("Collecting garbage from nix store")
 
-	gc := exec.CommandContext(ctx, "nix", "store", "gc", "-v")
-	gc.Stdout = os.Stderr
-	gc.Stderr = os.Stderr
-
-	return gc.Run()
+	if executor != nil && !executor.IsLocal() {
+		// Run garbage collection on remote (requires root/sudo)
+		// Note: NixOS GC requires sudo because it's a system-level operation
+		gcCmd, err := exec.CommandWithSudoIfNeeded(executor, "nix", "store", "gc", "-v")
+		if err != nil {
+			return fmt.Errorf("failed to create garbage collection command: %w", err)
+		}
+		// Set stdin to enable PTY allocation for sudo password prompt
+		gcCmd.SetStdin(os.Stdin)
+		gcCmd.SetStdout(os.Stderr)
+		gcCmd.SetStderr(os.Stderr)
+		err = gcCmd.Run()
+		if err != nil {
+			return fmt.Errorf("garbage collection failed: %w", err)
+		}
+		return nil
+	} else {
+		// Run garbage collection locally
+		gc := osexec.CommandContext(ctx, "nix", "store", "gc", "-v")
+		gc.Stdout = os.Stderr
+		gc.Stderr = os.Stderr
+		return gc.Run()
+	}
 }

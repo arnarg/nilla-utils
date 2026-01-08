@@ -3,7 +3,7 @@ package util
 import (
 	"fmt"
 	"os"
-	"os/exec"
+	osexec "os/exec"
 	"os/user"
 	"strconv"
 	"strings"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
+	"github.com/urfave/cli/v3"
 )
 
 const (
@@ -98,10 +99,11 @@ func IsRoot() bool {
 	return uid == 0
 }
 
+
 func SelfElevate() error {
 	args := append([]string{"sudo"}, os.Args...)
 
-	spath, err := exec.LookPath("sudo")
+	spath, err := osexec.LookPath("sudo")
 	if err != nil {
 		return err
 	}
@@ -161,4 +163,17 @@ func BuildStoreAddress(user, hostname string) string {
 		user = GetUser()
 	}
 	return fmt.Sprintf("ssh-ng://%s@%s", user, hostname)
+}
+
+// ValidateArgs validates command arguments and returns an error if there are unexpected arguments.
+// maxArgs specifies the maximum number of arguments allowed (0 means no arguments, 1 means at most one argument).
+func ValidateArgs(cmd *cli.Command, maxArgs int) error {
+	argCount := cmd.Args().Len()
+	if argCount > maxArgs {
+		// Get all unexpected arguments
+		args := cmd.Args().Slice()
+		unexpected := args[maxArgs:]
+		return fmt.Errorf("unexpected argument(s): %s", strings.Join(unexpected, " "))
+	}
+	return nil
 }
