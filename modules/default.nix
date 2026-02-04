@@ -7,5 +7,6 @@
     ./packages.nix
     ./shells.nix
     ./project.nix
+    ./microvm.nix
   ];
 }
