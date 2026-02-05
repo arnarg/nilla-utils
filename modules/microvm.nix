@@ -18,7 +18,7 @@ in
       default.value = { };
       type = lib.types.attrs.of (
         lib.types.submodule (
-          { config }:
+          { name, config }:
           {
             options = {
               args = lib.options.create {
@@ -81,10 +81,14 @@ in
                           # Higher priority than `mkOptionDefault` but lower than `mkDefault`.
                           hostPlatform = lib.mkOverride 1400 config.system;
                         };
+
+                        # Pass MicroVM name to microvm module.
+                        nutils.vmName = name;
                       }
                     )
                     nixosModule
                     "${config.microvm.src}/nixos-modules/microvm"
+                    ./microvm-module.nix
                   ];
                   modulesLocation = null;
                 };

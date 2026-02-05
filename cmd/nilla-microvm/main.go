@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/arnarg/nilla-utils/internal/diff"
 	"github.com/arnarg/nilla-utils/internal/exec"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/project"
@@ -64,11 +65,11 @@ var app = &cli.Command{
 		},
 	},
 	Commands: []*cli.Command{
-		// Create
+		// Install
 		{
-			Name:        "create",
-			Usage:       "Create a MicroVM",
-			Description: fmt.Sprintf("Create a MicroVM.\n\n%s", description),
+			Name:        "install",
+			Usage:       "Install a MicroVM",
+			Description: fmt.Sprintf("Install a MicroVM.\n\n%s", description),
 			ArgsUsage:   "<name>",
 			Flags: []cli.Flag{
 				&cli.BoolFlag{
@@ -77,7 +78,7 @@ var app = &cli.Command{
 					Usage:   "Do not ask for confirmation",
 				},
 			},
-			Action: createMicroVM,
+			Action: installMicroVM,
 		},
 
 		// Update
@@ -99,6 +100,22 @@ var app = &cli.Command{
 				},
 			},
 			Action: updateMicroVM,
+		},
+
+		// Uninstall
+		{
+			Name:        "uninstall",
+			Usage:       "Uninstall a MicroVM",
+			Description: fmt.Sprintf("Uninstall a MicroVM.\n\n%s", description),
+			ArgsUsage:   "<name>",
+			Flags: []cli.Flag{
+				&cli.BoolFlag{
+					Name:    "confirm",
+					Aliases: []string{"c"},
+					Usage:   "Do not ask for confirmation",
+				},
+			},
+			Action: uninstallMicroVM,
 		},
 
 		// List
@@ -125,9 +142,9 @@ func printSection(text string) {
 	fmt.Fprintf(os.Stderr, "\033[32m>\033[0m %s\n", text)
 }
 
-// getMicroVMAttr returns the nix attribute path for a microvm
+// getMicroVMAttr returns the nix attribute path for a microvm activation package
 func getMicroVMAttr(name string) string {
-	return fmt.Sprintf("systems.microvm.\"%s\".result.config.microvm.declaredRunner", name)
+	return fmt.Sprintf("systems.microvm.\"%s\".result.config.microvm.activationPackage", name)
 }
 
 // getMicroVMStateDir returns the state directory for a microvm
@@ -135,8 +152,8 @@ func getMicroVMStateDir(name string) string {
 	return filepath.Join(stateDir, name)
 }
 
-// buildMicroVM builds the microvm and returns the output path
-func buildMicroVM(ctx context.Context, cmd *cli.Command, name string) (string, error) {
+// buildActivationPackage builds the microvm activation package and returns the output path
+func buildActivationPackage(ctx context.Context, cmd *cli.Command, name string) (string, error) {
 	// Resolve project
 	source, err := project.Resolve(cmd.String("project"))
 	if err != nil {
@@ -146,7 +163,7 @@ func buildMicroVM(ctx context.Context, cmd *cli.Command, name string) (string, e
 	// Setup builder
 	builder := exec.NewLocalExecutor()
 
-	// Attribute of MicroVM declaredRunner
+	// Attribute of MicroVM activationPackage
 	attr := getMicroVMAttr(name)
 
 	// Check if attribute exists
@@ -182,7 +199,17 @@ func buildMicroVM(ctx context.Context, cmd *cli.Command, name string) (string, e
 	return strings.TrimSpace(string(out)), nil
 }
 
-func createMicroVM(ctx context.Context, cmd *cli.Command) error {
+// getDeclaredRunnerPath returns the path to the declared-runner within the activation package
+func getDeclaredRunnerPath(activationPkg string) string {
+	return filepath.Join(activationPkg, "declared-runner")
+}
+
+// getManageVMPath returns the path to the manage-vm script within the activation package
+func getManageVMPath(activationPkg string) string {
+	return filepath.Join(activationPkg, "bin", "manage-vm")
+}
+
+func installMicroVM(ctx context.Context, cmd *cli.Command) error {
 	// Setup logger
 	util.InitLogger(verboseCount)
 
@@ -198,17 +225,17 @@ func createMicroVM(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("MicroVM \"%s\" already exists at %s", name, stateDir)
 	}
 
-	// Build the microvm
-	outPath, err := buildMicroVM(ctx, cmd, name)
+	// Build the activation package
+	activationPkg, err := buildActivationPackage(ctx, cmd, name)
 	if err != nil {
 		return err
 	}
 
-	log.Debugf("Build completed successfully, output path: %s", outPath)
+	log.Debugf("Build completed successfully, activation package: %s", activationPkg)
 
 	// Ask confirmation
 	if !cmd.Bool("confirm") {
-		doContinue, err := tui.RunConfirm(fmt.Sprintf("Create MicroVM \"%s\"?", name))
+		doContinue, err := tui.RunConfirm(fmt.Sprintf("Install MicroVM \"%s\"?", name))
 		if err != nil {
 			return err
 		}
@@ -217,42 +244,21 @@ func createMicroVM(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
-	// Create state directory
-	printSection("Creating MicroVM state directory")
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
-		return fmt.Errorf("failed to create state directory: %w", err)
+	// Run manage-vm install with sudo
+	fmt.Fprintln(os.Stderr)
+	printSection("Installing MicroVM")
+	manageVM := getManageVMPath(activationPkg)
+	localExec := exec.NewLocalExecutor()
+	installCmd, err := localExec.Command("sudo", manageVM, "install")
+	if err != nil {
+		return fmt.Errorf("failed to create install command: %w", err)
 	}
-
-	// Create current symlink
-	currentLink := filepath.Join(stateDir, "current")
-	if err := os.Symlink(outPath, currentLink); err != nil {
-		return fmt.Errorf("failed to create current symlink: %w", err)
+	installCmd.SetStdin(os.Stdin)
+	installCmd.SetStderr(os.Stderr)
+	installCmd.SetStdout(os.Stdout)
+	if err := installCmd.Run(); err != nil {
+		return fmt.Errorf("failed to install MicroVM: %w", err)
 	}
-
-	// Create gcroots directory
-	if err := os.MkdirAll(gcrootsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create gcroots directory: %w", err)
-	}
-
-	// Create gcroot for current
-	gcrootCurrent := filepath.Join(gcrootsDir, name)
-	if err := os.Symlink(currentLink, gcrootCurrent); err != nil {
-		return fmt.Errorf("failed to create gcroot for current: %w", err)
-	}
-
-	// Create gcroot for booted (points to current initially)
-	gcrootBooted := filepath.Join(gcrootsDir, "booted-"+name)
-	if err := os.Symlink(currentLink, gcrootBooted); err != nil {
-		return fmt.Errorf("failed to create gcroot for booted: %w", err)
-	}
-
-	// Set permissions
-	if err := os.Chown(stateDir, -1, 0); err != nil {
-		log.Warnf("Failed to set group ownership: %v", err)
-	}
-
-	fmt.Fprintf(os.Stderr, "\n\033[32mCreated MicroVM %s.\033[0m Start with: \033[1;36msystemctl start %s@%s.service\033[0m\n",
-		name, systemdService, name)
 
 	return nil
 }
@@ -276,16 +282,18 @@ func updateMicroVM(ctx context.Context, cmd *cli.Command) error {
 	// Check if it's declarative (has toplevel file)
 	toplevelPath := filepath.Join(stateDir, "toplevel")
 	if _, err := os.Stat(toplevelPath); err == nil {
-		return fmt.Errorf("this MicroVM is managed fully declaratively and cannot be updated manually")
+		return fmt.Errorf("This MicroVM is managed fully declaratively and cannot be updated manually")
 	}
 
-	// Build the microvm
-	outPath, err := buildMicroVM(ctx, cmd, name)
+	// Build the activation package
+	activationPkg, err := buildActivationPackage(ctx, cmd, name)
 	if err != nil {
 		return err
 	}
 
-	log.Debugf("Build completed successfully, output path: %s", outPath)
+	// Get the new declared runner path
+	newRunnerPath := getDeclaredRunnerPath(activationPkg)
+	log.Debugf("Build completed successfully, activation package: %s", activationPkg)
 
 	// Get current path for diff
 	currentLink := filepath.Join(stateDir, "current")
@@ -295,13 +303,35 @@ func updateMicroVM(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Show diff if we have an old path
-	if oldPath != "" && oldPath != outPath {
-		fmt.Fprintln(os.Stderr)
-		printSection("Comparing changes")
+	if oldPath != "" && oldPath != newRunnerPath {
+		// Get the system paths for comparison
+		oldSystemPath := filepath.Join(oldPath, "share", "microvm", "system")
+		newSystemPath := filepath.Join(newRunnerPath, "share", "microvm", "system")
 
-		builder := exec.NewLocalExecutor()
-		if err := diffClosures(ctx, builder, oldPath, outPath); err != nil {
-			log.Warnf("Failed to show diff: %v", err)
+		// Check both system paths exist and are symlinks
+		oldFi, oldErr := os.Lstat(oldSystemPath)
+		newFi, newErr := os.Lstat(newSystemPath)
+
+		oldExists := oldErr == nil && oldFi.Mode()&os.ModeSymlink != 0
+		newExists := newErr == nil && newFi.Mode()&os.ModeSymlink != 0
+
+		if oldExists && newExists {
+			fmt.Fprintln(os.Stderr)
+			printSection("Comparing changes")
+
+			localExec := exec.NewLocalExecutor()
+			if err := diff.Execute(
+				&diff.Generation{
+					Path:     oldSystemPath,
+					Executor: localExec,
+				},
+				&diff.Generation{
+					Path:     newSystemPath,
+					Executor: localExec,
+				},
+			); err != nil {
+				log.Warnf("Failed to show diff: %v", err)
+			}
 		}
 	}
 
@@ -316,67 +346,87 @@ func updateMicroVM(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
-	// Update current symlink
+	// Run manage-vm update with sudo
+	fmt.Fprintln(os.Stderr)
 	printSection("Updating MicroVM")
-
-	// Remove old current symlink
-	if err := os.Remove(currentLink); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove old current symlink: %w", err)
+	manageVM := getManageVMPath(activationPkg)
+	localExec := exec.NewLocalExecutor()
+	updateArgs := []string{manageVM, "update"}
+	if cmd.Bool("restart") {
+		updateArgs = append(updateArgs, "--restart")
 	}
-
-	// Create new current symlink
-	if err := os.Symlink(outPath, currentLink); err != nil {
-		return fmt.Errorf("failed to create new current symlink: %w", err)
+	updateCmd, err := localExec.Command("sudo", updateArgs...)
+	if err != nil {
+		return fmt.Errorf("failed to create update command: %w", err)
 	}
-
-	// Check if booted exists and compare
-	bootedLink := filepath.Join(stateDir, "booted")
-	var bootedPath string
-	if fi, err := os.Lstat(bootedLink); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		bootedPath, _ = os.Readlink(bootedLink)
-	}
-
-	if bootedPath != "" {
-		if bootedPath == outPath {
-			fmt.Fprintf(os.Stderr, "No reboot of MicroVM %s required.\n", name)
-		} else if cmd.Bool("restart") {
-			fmt.Fprintf(os.Stderr, "Rebooting MicroVM %s\n", name)
-			if err := restartMicroVM(ctx, name); err != nil {
-				return err
-			}
-		} else {
-			fmt.Fprintf(os.Stderr, "Reboot MicroVM %s for the new profile: systemctl restart %s@%s.service\n",
-				name, systemdService, name)
-		}
-	} else if cmd.Bool("restart") {
-		fmt.Fprintf(os.Stderr, "Booting MicroVM %s\n", name)
-		if err := restartMicroVM(ctx, name); err != nil {
-			return err
-		}
+	updateCmd.SetStdin(os.Stdin)
+	updateCmd.SetStderr(os.Stderr)
+	updateCmd.SetStdout(os.Stdout)
+	if err := updateCmd.Run(); err != nil {
+		return fmt.Errorf("failed to update MicroVM: %w", err)
 	}
 
 	return nil
 }
 
-func diffClosures(ctx context.Context, exec exec.Executor, oldPath, newPath string) error {
-	cmd, err := exec.CommandContext(ctx, "nix", "store", "diff-closures", oldPath, newPath)
-	if err != nil {
-		return err
-	}
-	cmd.SetStdout(os.Stdout)
-	cmd.SetStderr(os.Stderr)
-	return cmd.Run()
-}
+func uninstallMicroVM(ctx context.Context, cmd *cli.Command) error {
+	// Setup logger
+	util.InitLogger(verboseCount)
 
-func restartMicroVM(ctx context.Context, name string) error {
-	builder := exec.NewLocalExecutor()
-	cmd, err := builder.CommandContext(ctx, "systemctl", "restart", fmt.Sprintf("%s@%s.service", systemdService, name))
-	if err != nil {
-		return err
+	// Get microvm name
+	name := cmd.Args().First()
+	if name == "" {
+		return fmt.Errorf("MicroVM name is required")
 	}
-	cmd.SetStdout(os.Stdout)
-	cmd.SetStderr(os.Stderr)
-	return cmd.Run()
+
+	// Check if exists
+	stateDir := getMicroVMStateDir(name)
+	if _, err := os.Stat(stateDir); err != nil {
+		return fmt.Errorf("MicroVM \"%s\" does not exist at %s", name, stateDir)
+	}
+
+	// Check if it's declarative (has toplevel file)
+	toplevelPath := filepath.Join(stateDir, "toplevel")
+	if _, err := os.Stat(toplevelPath); err == nil {
+		return fmt.Errorf("This MicroVM is managed fully declaratively and cannot be updated manually")
+	}
+
+	log.Infof("MicroVM %s found.", name)
+
+	// Check if uninstall script exists
+	uninstallScript := filepath.Join(stateDir, "uninstall")
+	if _, err := os.Stat(uninstallScript); err != nil {
+		log.Warnf("Uninstall script not found at %s. Manual cleanup is needed.", uninstallScript)
+		return fmt.Errorf("uninstall script not found")
+	}
+
+	// Ask confirmation
+	if !cmd.Bool("confirm") {
+		doContinue, err := tui.RunConfirm(fmt.Sprintf("Uninstall MicroVM \"%s\"?", name))
+		if err != nil {
+			return err
+		}
+		if !doContinue {
+			return nil
+		}
+	}
+
+	// Run uninstall script with sudo
+	fmt.Fprintln(os.Stderr)
+	printSection("Uninstalling MicroVM")
+	localExec := exec.NewLocalExecutor()
+	uninstallCmd, err := localExec.Command("sudo", uninstallScript)
+	if err != nil {
+		return fmt.Errorf("failed to create uninstall command: %w", err)
+	}
+	uninstallCmd.SetStdin(os.Stdin)
+	uninstallCmd.SetStderr(os.Stderr)
+	uninstallCmd.SetStdout(os.Stdout)
+	if err := uninstallCmd.Run(); err != nil {
+		return fmt.Errorf("failed to uninstall MicroVM: %w", err)
+	}
+
+	return nil
 }
 
 func listMicroVMs(ctx context.Context, cmd *cli.Command) error {
