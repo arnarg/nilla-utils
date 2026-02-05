@@ -18,12 +18,14 @@
   - [Quickstart](#quickstart)
   - [NixOS](#nixos)
   - [Home Manager](#home-manager)
+  - [MicroVM](#microvm)
   - [Nilla cli plugins](#nilla-cli-plugins)
     - [NixOS](#nixos-1)
     - [Home Manager](#home-manager-1)
     - [Using the CLI Plugins](#using-the-cli-plugins)
       - [NixOS (`nilla os`)](#nixos-nilla-os)
       - [Home Manager (`nilla home`)](#home-manager-nilla-home)
+      - [MicroVM (`nilla microvm`)](#microvm-nilla-microvm)
   - [Generators](#generators)
     - [Inputs](#inputs)
     - [Project](#project)
@@ -142,6 +144,79 @@ in nilla.create ({config}: {
 })
 ```
 
+## MicroVM
+
+The MicroVM module adds support for MicroVM systems under `systems.microvm`. This integrates with the [microvm.nix](https://github.com/microvm-nix/microvm.nix) project to allow you to define lightweight virtual machines directly within Nilla.
+
+```nix
+# nilla.nix
+let
+  pins = import ./npins;
+
+  nilla = import pins.nilla;
+in nilla.create ({config}: {
+  includes = [
+    "${pins.nilla-utils}/modules"
+  ];
+
+  config = {
+    systems.microvm.myvm = {
+      # Pass args to NixOS modules.
+      args.inputs = config.inputs;
+
+      # Set system from nilla.
+      # This option has lower priority than the NixOS option
+      # `nixpkgs.hostPlatform` within the NixOS modules.
+      system = "x86_64-linux";
+
+      modules = [
+        {
+          # Setup MicroVM shares
+          utils.microvm.shares.directories = [
+            "/home/user/code/project"
+          ];
+
+          # MicroVM-specific settings
+          microvm = {
+            vcpu = 2;
+            mem = 2048;
+          };
+
+          # ...
+        }
+      ];
+    };
+
+    # ...
+  };
+})
+```
+
+### MicroVM Options
+
+In addition to standard NixOS options, the following `utils.microvm` options are available in MicroVM modules:
+
+*   **`utils.microvm.manageHostKeys`** (bool, default: `true`): Automatically generate and manage SSH host keys for the MicroVM. The keys are stored on the host and mounted into the VM.
+*   **`utils.microvm.shares.directories`** (list): A list of directories to share with the VM via virtiofs. Each entry can be either a path string (mounted at the same path in the VM) or an attribute set with `source` (host path) and `mountPoint` (VM path).
+*   **`utils.microvm.shares.managePermissions`** (bool, default: `true`): Automatically set correct ownership for shared directories under `/home/<user>`.
+
+Example with shares:
+
+```nix
+{
+  utils.microvm.shares.directories = [
+    # Simple path share (same source and mount point)
+    "/home/user/data"
+
+    # Custom mapping with source and mount point
+    {
+      source = "/var/lib/shared-data";
+      mountPoint = "/data";
+    }
+  ];
+}
+```
+
 ## Nilla cli plugins
 
 nilla-utils provides plugins for nilla cli for sub-commands `nilla os` and `nilla home` that can be used to build and switch to NixOS and home-manager systems.
@@ -250,6 +325,34 @@ For managing Home Manager configurations defined in `systems.home`.
     nilla home generations clean --keep 3 # Keeps the last 3 generations
     ```
     Use `nilla home --help` or `nilla home <subcommand> --help` for more details.
+
+#### MicroVM (`nilla microvm`)
+
+For managing MicroVM configurations defined in `systems.microvm`.
+
+*   **Install a MicroVM:**
+    ```sh
+    nilla microvm install <name>
+    ```
+
+*   **Update a MicroVM:**
+    ```sh
+    nilla microvm update <name>
+    # Restart after update:
+    # nilla microvm update <name> --restart
+    ```
+
+*   **Uninstall a MicroVM:**
+    ```sh
+    nilla microvm uninstall <name>
+    ```
+
+*   **List available MicroVM configurations:**
+    ```sh
+    nilla microvm list
+    ```
+
+Use `nilla microvm --help` or `nilla microvm <subcommand> --help` for more details.
 
 ## Generators
 

@@ -5,7 +5,7 @@
   ...
 }:
 let
-  cfg = config.nutils;
+  cfg = config.utils.microvm;
   stateDir = "/var/lib/microvms";
 
   shareEntry = lib.types.submodule {
@@ -27,7 +27,7 @@ let
 in
 {
   options = with lib; {
-    nutils = {
+    utils.microvm = {
       vmName = mkOption {
         type = types.str;
         internal = true;
@@ -132,7 +132,7 @@ in
     };
 
     microvm.shares =
-      # Create virtiofs share for every share in nutils config.
+      # Create virtiofs share for every share in utils.microvm config.
       (map (share: {
         proto = "virtiofs";
         tag = lib.last (lib.splitString "/" share.source);

@@ -83,7 +83,7 @@ in
                         };
 
                         # Pass MicroVM name to microvm module.
-                        nutils.vmName = name;
+                        utils.microvm.vmName = name;
                       }
                     )
                     nixosModule
