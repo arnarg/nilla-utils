@@ -193,6 +193,13 @@ in nilla.create ({config}: {
 })
 ```
 
+To deploy MicroVMs, the host system must have the microvm.nix host module enabled:
+
+```nix
+# In your host's NixOS configuration
+imports = [ "${inputs.microvm.src}/nixos-modules/host" ];
+```
+
 ### MicroVM Options
 
 In addition to standard NixOS options, the following `utils.microvm` options are available in MicroVM modules:
@@ -217,6 +224,15 @@ Example with shares:
   ];
 }
 ```
+
+<details>
+<summary><b>Why use managePermissions?</b></summary>
+
+When mounting a share to a nested path like `/home/user/.local/share/example`, virtiofsd creates only the immediate parent directory (`/home/user/.local`) with root ownership, while `/home/user` and deeper directories retain correct ownership. This causes home-manager activation failures when the guest user cannot write to `.local`.
+
+Setting `utils.microvm.shares.managePermissions = true` generates systemd tmpfiles rules that pre-create the directory hierarchy with correct ownership during MicroVM bootup. This is done on a best-effort basis by matching on the username in the share path. UIDs must therefore match between host and guest for permissions to be set correctly.
+
+</details>
 
 ## Nilla cli plugins
 
