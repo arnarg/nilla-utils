@@ -30,6 +30,7 @@ in
         nixosModules.folder = "${folder}/modules/nixos";
         home.folder = "${folder}/hosts";
         homeModules.folder = "${folder}/modules/home";
+        microvm.folder = "${folder}/microvms";
 
         # Since the project generators sets default
         # paths for all we do not want to fail assertions

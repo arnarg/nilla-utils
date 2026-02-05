@@ -34,6 +34,7 @@
     - [Overlays](#overlays)
     - [NixOS](#nixos-2)
     - [Home Manager](#home-manager-2)
+    - [MicroVM](#microvm-1)
     - [NixOS Modules](#nixos-modules)
     - [Home Manager Modules](#home-manager-modules)
   - [Examples](#examples)
@@ -395,7 +396,7 @@ in nilla.create ({config}: {
 
 ### Project
 
-The project generator simplifies configuring other generators by assuming a standard project structure. When `generators.project.folder` is set, it automatically configures the `packages`, `shells`, `overlays`, `nixos` and `home` generators to discover content within subdirectories of the specified folder.
+The project generator simplifies configuring other generators by assuming a standard project structure. When `generators.project.folder` is set, it automatically configures the `packages`, `shells`, `overlays`, `nixos`, `home`, and `microvm` generators to discover content within subdirectories of the specified folder.
 
 For example, if you have a project structure like this:
 
@@ -442,6 +443,7 @@ in nilla.create ({config}: {
     # - generators.nixosModules.folder = "./modules/nixos";
     # - generators.home.folder = "./hosts";
     # - generators.homeModules.folder = "./modules/home";
+    # - generators.microvm.folder = "./microvms";
     generators.project.folder = ./.;
 
     # ...
@@ -641,6 +643,65 @@ in nilla.create ({config}: {
           # `home.username` and `home.homeDirectory` are automatically
           # generated from `generators.home.username` or from the name
           # of the user file if `<host>/home/<username>.nix` is found.
+
+          # ...
+        }
+      ];
+    };
+
+    # ...
+  };
+})
+```
+
+### MicroVM
+
+The MicroVM generator will generate MicroVM systems from a directory with sub-directories of hosts containing a `configuration.nix` file.
+
+Given the following structure:
+
+```
+.
+├── microvms
+│   ├── vm1
+│   │   └── configuration.nix
+│   ├── vm2
+│   │   └── configuration.nix
+│   └── something-else
+│       └── default.nix
+└── nilla.nix
+```
+
+And the following `nilla.nix` will generate MicroVM systems for `vm1` and `vm2`:
+
+```nix
+# nilla.nix
+let
+  pins = import ./npins;
+
+  nilla = import pins.nilla;
+in nilla.create ({config}: {
+  includes = [
+    "${pins.nilla-utils}/modules"
+  ];
+
+  config = {
+    generators.microvm = {
+      # Set the folder to generate from.
+      folder = ./microvms;
+
+      # Pass args to MicroVM modules.
+      # The generator will automatically pass `config.inputs`
+      # as `inputs`.
+      # args.inputs = config.inputs;
+
+      modules = [
+        {
+          # MicroVM-specific settings
+          microvm = {
+            vcpu = 2;
+            mem = 2048;
+          };
 
           # ...
         }

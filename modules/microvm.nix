@@ -1,7 +1,7 @@
 { config }:
 let
   inherit (config) inputs lib;
-  inherit (builtins) pathExists;
+  inherit (builtins) listToAttrs pathExists;
 
   globalModules = config.modules;
 
@@ -13,6 +13,24 @@ in
   ];
 
   options = {
+    generators.microvm = {
+      folder = lib.options.create {
+        type = lib.types.nullish lib.types.path;
+        description = "The folder to auto discover MicroVM hosts.";
+        default.value = null;
+      };
+      args = lib.options.create {
+        description = "Additional arguments to pass to system modules.";
+        type = lib.types.attrs.any;
+        default.value = { };
+      };
+      modules = lib.options.create {
+        type = lib.types.list.of lib.types.raw;
+        default.value = [ ];
+        description = "Default modules to include in all hosts.";
+      };
+    };
+
     systems.microvm = lib.options.create {
       description = "MicroVM systems to create.";
       default.value = { };
@@ -102,7 +120,15 @@ in
 
   config = {
     assertions =
-      lib.attrs.mapToList (name: value: {
+      (lib.lists.when config.generators.assertPaths [
+        {
+          assertion =
+            config.generators.microvm.folder == null
+            || (config.generators.microvm.folder != null && pathExists config.generators.microvm.folder);
+          message = "MicroVM generator's folder \"${config.generators.microvm.folder}\" does not exist.";
+        }
+      ])
+      ++ lib.attrs.mapToList (name: value: {
         assertion = !(builtins.isNull value.nixpkgs);
         message = "A Nixpkgs instance is required for the MicroVM system \"${name}\", but none was provided and \"inputs.nixpkgs\" does not exist.";
       }) config.systems.microvm
@@ -110,5 +136,25 @@ in
         assertion = !(builtins.isNull value.microvm);
         message = "A microvm instance is required for the MicroVM system \"${name}\", but none was provided and \"inputs.microvm\" does not exist.";
       }) config.systems.microvm;
+
+    # Generate MicroVM configurations from `generators.microvm`
+    systems.microvm =
+      lib.modules.when
+        (config.generators.microvm.folder != null && pathExists config.generators.microvm.folder)
+        (
+          listToAttrs (
+            map (host: {
+              name = host.hostname;
+              value = {
+                args = {
+                  inputs = config.inputs;
+                  host = host.hostname;
+                }
+                // config.generators.microvm.args;
+                modules = [ host.configuration ] ++ config.generators.microvm.modules;
+              };
+            }) (lib.utils.loadHostsFromDir config.generators.microvm.folder "configuration.nix")
+          )
+        );
   };
 }
