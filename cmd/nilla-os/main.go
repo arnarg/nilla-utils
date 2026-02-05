@@ -31,6 +31,7 @@ const (
 	subCmdSwitch
 )
 
+
 const SYSTEM_PROFILE = "/nix/var/nix/profiles/system"
 const CURRENT_PROFILE = "/run/current-system"
 
@@ -77,7 +78,7 @@ var app = &cli.Command{
 		&cli.StringFlag{
 			Name:    "target",
 			Aliases: []string{"t"},
-			Usage:   "Target host to deploy/activate on (for switch/test/boot commands). Can also be used with --build-on-target for builds.",
+			Usage:   "Target host to deploy/activate on (for switch/test/boot commands). Can also be used with --build-on-target for builds, or with generations commands to operate on remote hosts.",
 		},
 		&cli.StringFlag{
 			Name:  "build-on",
@@ -175,14 +176,14 @@ var app = &cli.Command{
 			Name:        "generations",
 			Aliases:     []string{"gen"},
 			Usage:       "Work with NixOS generations",
-			Description: "Work with NixOS generations",
+			Description: "Work with NixOS generations. Use --target to operate on remote hosts.",
 			Commands: []*cli.Command{
 				// List
 				{
 					Name:        "list",
 					Aliases:     []string{"ls"},
 					Usage:       "List NixOS generations",
-					Description: "List NixOS generations",
+					Description: "List NixOS generations. Use --target to list generations on a remote host.",
 					Action:      listGenerations,
 				},
 
@@ -191,7 +192,7 @@ var app = &cli.Command{
 					Name:        "clean",
 					Aliases:     []string{"c"},
 					Usage:       "Delete and garbage collect NixOS generations",
-					Description: "Delete and garbage collect NixOS generations",
+					Description: "Delete and garbage collect NixOS generations. Use --target to clean generations on a remote host.",
 					Flags: []cli.Flag{
 						&cli.UintFlag{
 							Name:    "keep",
@@ -237,6 +238,11 @@ func inferName(name string) (string, error) {
 }
 
 func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
+	// Validate arguments (at most 1 argument allowed: optional [name])
+	if err := util.ValidateArgs(cmd, 1); err != nil {
+		return err
+	}
+
 	var builder, target exec.Executor
 
 	// Setup logger
@@ -391,25 +397,10 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	fmt.Fprintln(os.Stderr)
 	printSection("Comparing changes")
 
-	// If we built remotely, use remote executor for the new build (faster - no copy needed)
-	// Otherwise, use local executor for the new build
-	newBuildExecutor := builder
-	if buildTarget != "" && storeAddress != "" {
-		// If build target is same as deploy target, use deploy executor
-		// Otherwise, create a separate executor for the build target
-		if buildTarget == cmd.String("target") && cmd.String("target") != "" {
-			log.Debugf("Using remote executor for diff (both generations on remote, same as deploy target)")
-			newBuildExecutor = target
-		} else {
-			log.Debugf("Setting up SSH executor for build target: %s", buildTarget)
-			buildTargetExecutor, err := exec.NewSSHExecutor(buildTarget)
-			if err != nil {
-				log.Debugf("Failed to create SSH executor for build target: %v", err)
-				return fmt.Errorf("failed to create SSH executor for build target: %w", err)
-			}
-			log.Debugf("Using remote executor for diff (new build on remote build target)")
-			newBuildExecutor = buildTargetExecutor
-		}
+	// Determine executor for new build
+	newBuildExecutor, err := exec.DetermineNewBuildExecutor(builder, target, buildTarget, storeAddress, cmd.String("target"))
+	if err != nil {
+		return err
 	}
 
 	log.Debugf("Running diff: current=%s (executor=%T), new=%s (executor=%T)", CURRENT_PROFILE, target, string(out), newBuildExecutor)
@@ -451,38 +442,16 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	// Copy closure to target
 	//
 	if cmd.String("target") != "" {
-		// Skip copy if we built remotely on the same host as the deploy target
-		if buildTarget != "" && buildTarget == cmd.String("target") {
-			log.Debugf("Skipping copy: build and deploy are on the same host (%s)", buildTarget)
-		} else {
 		fmt.Fprintln(os.Stderr)
 		printSection("Copying system to target")
 
-		// Copy system closure
-			copyArgs := []string{
-				"--to", fmt.Sprintf("ssh://%s", cmd.String("target")),
-			}
-
-			// If we built remotely on a different host, copy from the build host
-			if buildTarget != "" && buildTarget != cmd.String("target") {
-				buildUser, buildHostname := util.ParseTarget(buildTarget)
-				buildStoreAddress := util.BuildStoreAddress(buildUser, buildHostname)
-				copyArgs = append(copyArgs, "--from", buildStoreAddress)
-				log.Debugf("Copying from build host %s to deploy target %s", buildTarget, cmd.String("target"))
-			}
-
-			copyArgs = append(copyArgs, string(out))
-
-			nixCopyCmd := nix.Command("copy").
-				Args(copyArgs).
-			Executor(builder)
+		var reporter nix.ProgressReporter
 		if !cmd.Bool("raw") {
-			nixCopyCmd = nixCopyCmd.Reporter(tui.NewCopyReporter(cmd.Bool("verbose")))
+			reporter = tui.NewCopyReporter(cmd.Bool("verbose"))
 		}
-		_, err := nixCopyCmd.Run(ctx)
-		if err != nil {
+
+		if err := nix.CopyToTarget(ctx, builder, string(out), cmd.String("target"), buildTarget, !cmd.Bool("raw"), reporter); err != nil {
 			return err
-			}
 		}
 	}
 
@@ -493,9 +462,9 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		fmt.Fprintln(os.Stderr)
 		printSection("Activating configuration")
 
-		// Run switch_to_configuration
+		// Run switch_to_configuration (NixOS activation requires root)
 		switchp := fmt.Sprintf("%s/bin/switch-to-configuration", out)
-		switchc, err := target.Command("sudo", switchp, "test")
+		switchc, err := exec.CommandWithSudoIfNeeded(target, switchp, "test")
 		if err != nil {
 			return err
 		}
@@ -518,9 +487,9 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		fmt.Fprintln(os.Stderr)
 		printSection("Adding configuration to bootloader")
 
-		// Set profile
-		buildc, err := target.Command(
-			"sudo", "nix", "build",
+		// Set profile (requires root for system profile)
+		buildc, err := exec.CommandWithSudoIfNeeded(target,
+			"nix", "build",
 			"--no-link", "--profile", SYSTEM_PROFILE,
 			"--extra-experimental-features", "nix-command",
 			string(out),
@@ -536,9 +505,9 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 			return err
 		}
 
-		// Run switch_to_configuration
+		// Run switch_to_configuration (requires root)
 		switchp := fmt.Sprintf("%s/bin/switch-to-configuration", out)
-		switchc, err := target.Command("sudo", switchp, "boot")
+		switchc, err := exec.CommandWithSudoIfNeeded(target, switchp, "boot")
 		if err != nil {
 			return err
 		}
@@ -554,6 +523,10 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 }
 
 func listConfigurations(ctx context.Context, cmd *cli.Command) error {
+	if err := util.ValidateArgs(cmd, 0); err != nil {
+		return err
+	}
+
 	// Setup logger
 	util.InitLogger(verboseCount)
 

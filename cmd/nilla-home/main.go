@@ -82,7 +82,7 @@ var app = &cli.Command{
 		&cli.StringFlag{
 			Name:    "target",
 			Aliases: []string{"t"},
-			Usage:   "Target host to deploy/activate on (for switch command). Can also be used with --build-on-target for builds.",
+			Usage:   "Target host to deploy/activate on (for switch command). Can also be used with --build-on-target for builds, or with generations commands to operate on remote hosts.",
 		},
 		&cli.StringFlag{
 			Name:  "build-on",
@@ -148,14 +148,15 @@ var app = &cli.Command{
 			Name:        "generations",
 			Aliases:     []string{"gen"},
 			Usage:       "Work with home-manager generations",
-			Description: "Work with home-manager generations",
+			Description: "Work with home-manager generations. Use --target to operate on remote hosts.",
 			Commands: []*cli.Command{
 				// List
 				{
 					Name:        "list",
 					Aliases:     []string{"ls"},
 					Usage:       "List home-manager generations",
-					Description: "List home-manager generations",
+					ArgsUsage:   "[name]",
+					Description: "List home-manager generations. Use --target to list generations on a remote host. If [name] is provided, it must be a Home Manager configuration name (e.g., 'root@host1') from the project, and its hostname must match the --target hostname. The username from [name] will be used to query generations on the target.",
 					Action:      listGenerations,
 				},
 
@@ -163,8 +164,9 @@ var app = &cli.Command{
 				{
 					Name:        "clean",
 					Aliases:     []string{"c"},
-					Usage:       "Delete and garbage collect NixOS generations",
-					Description: "Delete and garbage collect NixOS generations",
+					Usage:       "Delete and garbage collect Home Manager generations",
+					ArgsUsage:   "[name]",
+					Description: "Delete and garbage collect Home Manager generations. Use --target to clean generations on a remote host. If [name] is provided, it must be a Home Manager configuration name (e.g., 'root@host1') from the project, and its hostname must match the --target hostname. The username from [name] will be used to query generations on the target.",
 					Flags: []cli.Flag{
 						&cli.UintFlag{
 							Name:    "keep",
@@ -233,6 +235,11 @@ func findHomeConfiguration(p string, names []string) (string, error) {
 }
 
 func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
+	// Validate arguments (at most 1 argument allowed: optional [name])
+	if err := util.ValidateArgs(cmd, 1); err != nil {
+		return err
+	}
+
 	var builder, target exec.Executor
 
 	// Setup logger
@@ -248,7 +255,7 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	builder = exec.NewLocalExecutor()
 
 	// Try to find current generation
-	current, err := generation.CurrentHomeGeneration()
+	current, err := generation.CurrentHomeGeneration(nil, "")
 	if err != nil {
 		return err
 	}
@@ -397,7 +404,7 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	printSection("Comparing changes")
 
 	// Determine executors and paths for diff
-	newBuildExecutor, err := determineNewBuildExecutor(builder, target, buildTarget, storeAddress, cmd.String("target"))
+	newBuildExecutor, err := exec.DetermineNewBuildExecutor(builder, target, buildTarget, storeAddress, cmd.String("target"))
 	if err != nil {
 		return err
 	}
@@ -443,6 +450,18 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	}
 
 	//
+	// Copy closure to target (if needed)
+	//
+	if sc == subCmdSwitch && cmd.String("target") != "" {
+		fmt.Fprintln(os.Stderr)
+		printSection("Copying configuration to target")
+
+		if err := nix.CopyToTarget(ctx, builder, string(out), cmd.String("target"), buildTarget, false, nil); err != nil {
+			return fmt.Errorf("failed to copy configuration to target: %w", err)
+		}
+	}
+
+	//
 	// Activate Home Manager configuration
 	//
 	if sc == subCmdSwitch {
@@ -450,14 +469,24 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		printSection("Activating configuration")
 
 		// Determine executor for activation (use target if set, otherwise local)
-		activateExecutor := builder
-		if cmd.String("target") != "" {
-			activateExecutor = target
+		activateExecutor := target
+		if target == nil {
+			activateExecutor = builder
 		}
 
 		// Run activation script
+		// Extract username from system name (e.g., "root@host1" -> "root")
+		activateUser := extractUsername(name)
 		switchp := fmt.Sprintf("%s/activate", string(out))
-		switchc, err := activateExecutor.Command(switchp)
+		var switchc exec.Command
+		if !activateExecutor.IsLocal() {
+			// For remote activation, use CommandAsUser to ensure HOME is set correctly
+			// This uses "sudo -u <user> -H" which sets HOME to the target user's home directory
+			switchc, err = exec.CommandAsUser(activateExecutor, activateUser, switchp)
+		} else {
+			// For local activation, run directly (HOME is already correct)
+			switchc, err = activateExecutor.Command(switchp)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to create activation command: %w", err)
 		}
@@ -472,28 +501,6 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	}
 
 	return nil
-}
-
-// determineNewBuildExecutor selects the executor for the new build based on build location and target.
-func determineNewBuildExecutor(builder, target exec.Executor, buildTarget, storeAddress, targetStr string) (exec.Executor, error) {
-	if buildTarget != "" && storeAddress != "" {
-		// Built remotely
-		if buildTarget == targetStr && targetStr != "" {
-			return target, nil
-		}
-		// Built on different host - create executor for build host
-		buildExecutor, err := exec.NewSSHExecutor(buildTarget)
-		if err != nil {
-			log.Debugf("Failed to create SSH executor for build target: %v", err)
-			return nil, fmt.Errorf("failed to create SSH executor for build target: %w", err)
-		}
-		return buildExecutor, nil
-	}
-	if targetStr != "" {
-		// Built locally but deploying to target
-		return target, nil
-	}
-	return builder, nil
 }
 
 // determineCurrentGenerationExecutor selects the executor and path for the current generation.
@@ -522,6 +529,10 @@ func extractUsername(name string) string {
 }
 
 func listConfigurations(ctx context.Context, cmd *cli.Command) error {
+	if err := util.ValidateArgs(cmd, 0); err != nil {
+		return err
+	}
+
 	// Setup logger
 	util.InitLogger(verboseCount)
 

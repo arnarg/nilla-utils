@@ -167,6 +167,12 @@ func (c *sshCommand) Start() error {
 				if err != nil {
 					return err
 				}
+			} else {
+				// Try to request PTY anyway with default size (might work in some cases)
+				err := c.sess.RequestPty("xterm-256color", 80, 24, modes)
+				if err != nil {
+					log.Debugf("Failed to allocate PTY for sudo command: %v", err)
+				}
 			}
 		}
 	}

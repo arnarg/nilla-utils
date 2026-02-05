@@ -260,20 +260,20 @@ For managing NixOS systems defined in `systems.nixos`.
     ```sh
     nilla os build <system_name>
     # Build on remote host:
-    # nilla os build <system_name> --build-on user@hostname
+    # nilla os build <system_name> --build-on <user@target>
     # Build on same host as target:
-    # nilla os build <system_name> --target user@hostname --build-on-target
+    # nilla os build <system_name> --target <user@target> --build-on-target
     ```
 
 *   **Build and switch to a configuration:**
     ```sh
     nilla os switch <system_name>
     # For remote targets:
-    # nilla os switch <system_name> --target user@hostname
+    # nilla os switch <system_name> --target <user@target>
     # Build on remote, deploy to different host:
-    # nilla os switch <system_name> --build-on user@builder --target user@hostname
+    # nilla os switch <system_name> --build-on user@builder --target <user@target>
     # Build and deploy to same host:
-    # nilla os switch <system_name> --target user@hostname --build-on-target
+    # nilla os switch <system_name> --target <user@target> --build-on-target
     ```
 *   **Test a configuration:**
     ```sh
@@ -291,6 +291,9 @@ For managing NixOS systems defined in `systems.nixos`.
     ```sh
     nilla os generations list
     nilla os generations clean --keep 3 # Keeps the last 3 generations
+    # For remote targets:
+    nilla os --target <user@target> generations list
+    nilla os --target <user@target> generations clean --keep 3
     ```
     Use `nilla os --help` or `nilla os <subcommand> --help` for more details.
 
@@ -302,19 +305,19 @@ For managing Home Manager configurations defined in `systems.home`.
     ```sh
     nilla home build <user@system_name>
     # Build on remote host:
-    # nilla home build <user@system_name> --build-on user@hostname
+    nilla home build <user@system_name> --build-on <user@build-target>
     # Build on same host as target:
-    # nilla home build <user@system_name> --target user@hostname --build-on-target
+    nilla home build <user@system_name> --target <user@target> --build-on-target
     ```
 *   **Build and switch to a configuration:**
     ```sh
     nilla home switch <user@system_name>
     # For remote targets:
-    # nilla home switch <user@system_name> --target user@hostname
+    nilla home switch <user@system_name> --target <user@target>
     # Build on remote, deploy to different host:
-    # nilla home switch <user@system_name> --build-on user@builder --target user@hostname
+    nilla home switch <user@system_name> --build-on <user@build-target> --target <user@target>
     # Build and deploy to same host:
-    # nilla home switch <user@system_name> --target user@hostname --build-on-target
+    nilla home switch <user@system_name> --target <user@target> --build-on-target
     ```
 *   **List available Home Manager configurations:**
     ```sh
@@ -324,6 +327,15 @@ For managing Home Manager configurations defined in `systems.home`.
     ```sh
     nilla home generations list
     nilla home generations clean --keep 3 # Keeps the last 3 generations
+    # For remote host - connect as current user:
+    nilla home --target <target> generations list
+    nilla home --target <target> generations clean --keep 3
+    # For remote host - connect as specific user:
+    nilla home --target <user@target> generations list
+    nilla home --target <user@target> generations clean --keep 3
+    # For remote host - connect as specific user and use specific Home Manager configuration (configuration must exist in "nilla home list" and hostname must match target):
+    nilla home --target <user@target> generations list <user@system_name>
+    nilla home --target <user@target> generations clean --keep 3 <user@system_name>
     ```
     Use `nilla home --help` or `nilla home <subcommand> --help` for more details.
 
