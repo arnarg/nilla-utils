@@ -98,6 +98,38 @@ func IsRoot() bool {
 	return uid == 0
 }
 
+// IsInGroup checks if the current user is a member of the specified group.
+func IsInGroup(groupName string) bool {
+	currentUser, err := user.Current()
+	if err != nil {
+		return false
+	}
+
+	// Check primary group
+	group, err := user.LookupGroupId(currentUser.Gid)
+	if err == nil && group.Name == groupName {
+		return true
+	}
+
+	// Check supplementary groups
+	groupIds, err := currentUser.GroupIds()
+	if err != nil {
+		return false
+	}
+
+	for _, id := range groupIds {
+		if id == currentUser.Gid {
+			continue // Already checked primary group
+		}
+		g, err := user.LookupGroupId(id)
+		if err == nil && g.Name == groupName {
+			return true
+		}
+	}
+
+	return false
+}
+
 func SelfElevate() error {
 	args := append([]string{"sudo"}, os.Args...)
 

@@ -1,20 +1,25 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
+	goexec "os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/arnarg/nilla-utils/internal/diff"
 	"github.com/arnarg/nilla-utils/internal/exec"
+	"github.com/arnarg/nilla-utils/internal/microvm"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/project"
 	"github.com/arnarg/nilla-utils/internal/tui"
 	"github.com/arnarg/nilla-utils/internal/util"
 	"github.com/charmbracelet/log"
 	"github.com/urfave/cli/v3"
+	"github.com/valyala/fastjson"
 )
 
 var version = "unknown"
@@ -65,6 +70,21 @@ var app = &cli.Command{
 		},
 	},
 	Commands: []*cli.Command{
+		// Run
+		{
+			Name:        "run",
+			Usage:       "Run a MicroVM interactively",
+			Description: fmt.Sprintf("Run a MicroVM interactively in a temporary directory.\n\n%s", description),
+			ArgsUsage:   "<name>",
+			Flags: []cli.Flag{
+				&cli.BoolFlag{
+					Name:  "no-cleanup",
+					Usage: "Do not clean up the temporary directory on exit",
+				},
+			},
+			Action: runMicroVM,
+		},
+
 		// Install
 		{
 			Name:        "install",
@@ -118,6 +138,15 @@ var app = &cli.Command{
 			Action: uninstallMicroVM,
 		},
 
+		// Stop
+		{
+			Name:        "stop",
+			Usage:       "Stop a running MicroVM",
+			Description: fmt.Sprintf("Stop a MicroVM that was started with 'nilla microvm run'.\n\n%s", description),
+			ArgsUsage:   "<name>",
+			Action:      stopMicroVM,
+		},
+
 		// List
 		{
 			Name:        "list",
@@ -145,6 +174,11 @@ func printSection(text string) {
 // getMicroVMAttr returns the nix attribute path for a microvm activation package
 func getMicroVMAttr(name string) string {
 	return fmt.Sprintf("systems.microvm.\"%s\".result.config.microvm.activationPackage", name)
+}
+
+// getMicroVMRunnerAttr returns the nix attribute path for a microvm declared runner
+func getMicroVMRunnerAttr(name string) string {
+	return fmt.Sprintf("systems.microvm.\"%s\".result.config.microvm.declaredRunner", name)
 }
 
 // getMicroVMStateDir returns the state directory for a microvm
@@ -194,6 +228,53 @@ func buildActivationPackage(ctx context.Context, cmd *cli.Command, name string) 
 	if err != nil {
 		log.Debugf("Nix build command failed with error: %v", err)
 		return "", fmt.Errorf("failed to build MicroVM: %w", err)
+	}
+
+	return strings.TrimSpace(string(out)), nil
+}
+
+// buildDeclaredRunner builds the microvm declared runner and returns the output path
+func buildDeclaredRunner(ctx context.Context, cmd *cli.Command, name string) (string, error) {
+	// Resolve project
+	source, err := project.Resolve(cmd.String("project"))
+	if err != nil {
+		return "", err
+	}
+
+	// Setup builder
+	builder := exec.NewLocalExecutor()
+
+	// Attribute of MicroVM declaredRunner
+	attr := getMicroVMRunnerAttr(name)
+
+	// Check if attribute exists
+	exists, err := nix.ExistsInProject(source.NillaPath, source.FixedOutputStoreEntry(), attr)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("attribute '%s' does not exist in project \"%s\"", attr, source.FullNillaPath())
+	}
+
+	log.Infof("Found MicroVM \"%s\"", name)
+
+	// Build args for nix build
+	nargs := []string{"-f", source.FullNillaPath(), attr, "--no-link"}
+
+	// Run nix build
+	printSection("Building MicroVM runner")
+	nixBuildCmd := nix.Command("build").
+		Args(nargs).
+		Executor(builder)
+
+	if !cmd.Bool("raw") {
+		nixBuildCmd = nixBuildCmd.Reporter(tui.NewBuildReporter(cmd.Bool("verbose")))
+	}
+
+	out, err := nixBuildCmd.Run(ctx)
+	if err != nil {
+		log.Debugf("Nix build command failed with error: %v", err)
+		return "", fmt.Errorf("failed to build MicroVM runner: %w", err)
 	}
 
 	return strings.TrimSpace(string(out)), nil
@@ -455,6 +536,185 @@ func listMicroVMs(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
+	return nil
+}
+
+func runMicroVM(ctx context.Context, cmd *cli.Command) error {
+	// Setup logger
+	util.InitLogger(verboseCount)
+
+	// We need to self-elevate if we're not in the kvm group before continuing
+	if !util.IsRoot() && !util.IsInGroup("kvm") {
+		return util.SelfElevate()
+	}
+
+	// Get microvm name
+	name := cmd.Args().First()
+	if name == "" {
+		return fmt.Errorf("MicroVM name is required")
+	}
+
+	// Check if temp directory already exists
+	tempDir := filepath.Join("/tmp", "nilla-microvm", name)
+	if _, err := os.Stat(tempDir); err == nil {
+		return fmt.Errorf("MicroVM \"%s\" is already running with `nilla microvm run`. Run `nilla microvm stop %s` to stop it.", name, name)
+	}
+
+	// Build the declared runner
+	declaredRunner, err := buildDeclaredRunner(ctx, cmd, name)
+	if err != nil {
+		return err
+	}
+
+	log.Debugf("Build completed successfully, declared runner: %s", declaredRunner)
+
+	// Create temporary directory in /tmp/nilla-microvm/<name>
+	if err := os.MkdirAll(filepath.Dir(tempDir), 0755); err != nil {
+		return fmt.Errorf("failed to create parent directory: %w", err)
+	}
+	if err := os.Mkdir(tempDir, 0755); err != nil {
+		return fmt.Errorf("failed to create temporary directory: %w", err)
+	}
+	log.Debugf("Created temporary directory: %s", tempDir)
+
+	// Create a symlink to the declared runner for the stop command to use
+	runnerLink := filepath.Join(tempDir, "runner")
+	if err := os.Symlink(declaredRunner, runnerLink); err != nil {
+		return fmt.Errorf("failed to create runner symlink: %w", err)
+	}
+	log.Debugf("Created runner symlink: %s -> %s", runnerLink, declaredRunner)
+
+	// Cleanup unless --no-cleanup is set
+	if !cmd.Bool("no-cleanup") {
+		defer func() {
+			log.Debugf("Cleaning up temporary directory: %s", tempDir)
+			if err := os.RemoveAll(tempDir); err != nil {
+				log.Warnf("Failed to clean up temporary directory: %v", err)
+			}
+		}()
+	}
+
+	// Start virtiofsd services
+	virtiofsdRunPath := filepath.Join(declaredRunner, "bin", "virtiofsd-run")
+	supervisordLogPath := filepath.Join(tempDir, "supervisord.log")
+	printSection("Starting virtiofsd services")
+
+	runner := microvm.NewVirtiofsdRunner(virtiofsdRunPath, tempDir, supervisordLogPath)
+	if err := runner.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start virtiofsd services: %w", err)
+	}
+	defer runner.Stop()
+
+	// Wait for all supervisord processes to be running
+	go func() {
+		for name := range runner.Running() {
+			fmt.Printf("Process running: %s\n", name)
+		}
+	}()
+	if err := <-runner.Ready(); err != nil {
+		return fmt.Errorf("virtiofsd services failed: %w", err)
+	}
+
+	// Run microvm-run in the foreground
+	microvmRunPath := filepath.Join(declaredRunner, "bin", "microvm-run")
+	printSection("Starting MicroVM")
+	microvmCmd := goexec.CommandContext(ctx, microvmRunPath)
+	microvmCmd.Dir = tempDir
+	microvmCmd.Stdin = os.Stdin
+	microvmCmd.Stdout = os.Stdout
+	microvmCmd.Stderr = os.Stderr
+
+	log.Debugf("Starting microvm-run: %s", microvmRunPath)
+	if err := microvmCmd.Run(); err != nil {
+		return fmt.Errorf("microvm-run failed: %w", err)
+	}
+
+	return nil
+}
+
+func stopMicroVM(ctx context.Context, cmd *cli.Command) error {
+	// Setup logger
+	util.InitLogger(verboseCount)
+
+	// We need to self-elevate if we're not in the kvm group before continuing
+	if !util.IsRoot() && !util.IsInGroup("kvm") {
+		return util.SelfElevate()
+	}
+
+	// Get microvm name
+	name := cmd.Args().First()
+	if name == "" {
+		return fmt.Errorf("MicroVM name is required")
+	}
+
+	// Check if temp directory exists
+	tempDir := filepath.Join("/tmp", "nilla-microvm", name)
+	if _, err := os.Stat(tempDir); err != nil {
+		return fmt.Errorf("MicroVM \"%s\" is not running with `nilla microvm run`.", name)
+	}
+
+	// Read the runner symlink
+	runnerLink := filepath.Join(tempDir, "runner")
+	declaredRunner, err := os.Readlink(runnerLink)
+	if err != nil {
+		return fmt.Errorf("failed to read runner symlink: %w", err)
+	}
+
+	log.Infof("Found running MicroVM \"%s\".", name)
+
+	// Run microvm-shutdown in the temp directory
+	microvmShutdownPath := filepath.Join(declaredRunner, "bin", "microvm-shutdown")
+	printSection("Stopping MicroVM")
+	shutdownCmd := goexec.CommandContext(ctx, microvmShutdownPath)
+	shutdownCmd.Dir = tempDir
+	shutdownCmd.Stdin = os.Stdin
+	shutdownCmd.Stderr = os.Stderr
+
+	// Capture stdout to parse QMP events
+	stdout, err := shutdownCmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	if err := shutdownCmd.Start(); err != nil {
+		return fmt.Errorf("failed to start microvm-shutdown: %w", err)
+	}
+
+	// Parse output looking for SHUTDOWN event with timeout
+	parser := &fastjson.Parser{}
+	scanner := bufio.NewScanner(stdout)
+	done := make(chan struct{})
+
+	go func() {
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			val, err := parser.ParseBytes(line)
+			if err != nil {
+				continue // skip non-JSON lines
+			}
+			// Check for SHUTDOWN event
+			if string(val.GetStringBytes("event")) == "SHUTDOWN" {
+				close(done)
+				return
+			}
+		}
+	}()
+
+	// Wait for SHUTDOWN event or timeout
+	select {
+	case <-done:
+		// SHUTDOWN received, kill the process
+		shutdownCmd.Process.Kill()
+	case <-time.After(30 * time.Second):
+		shutdownCmd.Process.Kill()
+		return fmt.Errorf("timeout waiting for MicroVM to shut down")
+	case <-ctx.Done():
+		shutdownCmd.Process.Kill()
+		return ctx.Err()
+	}
+
+	// Wait for process to exit (it may have already)
+	shutdownCmd.Wait()
 	return nil
 }
 

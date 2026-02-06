@@ -347,6 +347,16 @@ For managing Home Manager configurations defined in `systems.home`.
 
 For managing MicroVM configurations defined in `systems.microvm`.
 
+*   **Run a MicroVM interactively:**
+    ```sh
+    nilla microvm run <name>
+    ```
+
+*   **Stop a running MicroVM (that was started with `nilla microvm run`):**
+    ```sh
+    nilla microvm stop <name>
+    ```
+
 *   **Install a MicroVM:**
     ```sh
     nilla microvm install <name>
