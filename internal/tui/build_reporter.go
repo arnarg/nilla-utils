@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/util"
@@ -60,6 +61,12 @@ type buildModel struct {
 	lastMsg string
 
 	errs []error
+
+	// Featured item tracking (pure: times come from Msgs only)
+	featuredID      int64
+	featuredKind    string // "build" or "download"
+	featuredSince   time.Time
+	rotationPending bool
 }
 
 func initBuildModel(verbose bool) buildModel {
@@ -78,6 +85,8 @@ func initBuildModel(verbose bool) buildModel {
 		transfers:         map[int64]int64{},
 		lastMsg:           "Initializing build...",
 		errs:              []error{},
+		featuredID:        0,
+		rotationPending:   false,
 	}
 }
 
@@ -85,12 +94,14 @@ func (m buildModel) error() error {
 	if len(m.errs) > 0 {
 		return errors.Join(m.errs...)
 	}
-
 	return nil
 }
 
 func (m buildModel) Init() tea.Cmd {
-	return m.spinner.Tick
+	return tea.Batch(
+		m.spinner.Tick,
+		scheduleRotationCheck(),
+	)
 }
 
 func (m buildModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -100,6 +111,44 @@ func (m buildModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 
+	case rotationCheckMsg:
+		now := time.Time(msg)
+		m.rotationPending = false
+		var cmd tea.Cmd
+
+		// Check if we should rotate (minimum hold time passed)
+		if m.featuredID != 0 && now.Sub(m.featuredSince) >= minFeatureDuration {
+			if nextID, nextKind, ok := m.selectNextActive(); ok {
+				// Rotate to next item
+				m.featuredID = nextID
+				m.featuredKind = nextKind
+				m.featuredSince = now // Use the time from the tick message
+				m.lastMsg = m.formatFeaturedItem()
+			} else if !m.isFeaturedActive() {
+				// Current item gone and no replacement
+				m.featuredID = 0
+				if !m.verbose {
+					m.lastMsg = ""
+				}
+			}
+		}
+
+		// Reschedule check if we have active work
+		if len(m.builds) > 0 || len(m.downloads) > 0 {
+			m.rotationPending = true
+			cmd = scheduleRotationCheck()
+		}
+
+		return m, cmd
+
+	case featureMsg:
+		// New item featured (either from start event or immediate rotation)
+		m.featuredID = msg.id
+		m.featuredKind = msg.kind
+		m.featuredSince = msg.at // Time captured by the command
+		m.lastMsg = m.formatFeaturedItem()
+		return m, nil
+
 	case nix.Event:
 		return m.handleEvent(msg)
 	}
@@ -107,38 +156,84 @@ func (m buildModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m buildModel) handleEvent(ev nix.Event) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
+// selectNextActive is pure: it selects the next item without side effects or time calls
+func (m buildModel) selectNextActive() (id int64, kind string, ok bool) {
+	currentID := m.featuredID
+	currentKind := m.featuredKind
 
+	// Round-robin: alternate between categories when possible
+	if currentKind == "download" {
+		// Prefer switching to a build
+		for id := range m.builds {
+			return id, "build", true
+		}
+		// Or another download
+		for id := range m.downloads {
+			if id != currentID {
+				return id, "download", true
+			}
+		}
+	} else {
+		// Prefer switching to a download
+		for id := range m.downloads {
+			return id, "download", true
+		}
+		// Or another build
+		for id := range m.builds {
+			if id != currentID {
+				return id, "build", true
+			}
+		}
+	}
+
+	// If current item still exists, keep it (no rotation needed)
+	if currentKind == "build" {
+		if _, exists := m.builds[currentID]; exists {
+			return currentID, "build", true
+		}
+	} else {
+		if _, exists := m.downloads[currentID]; exists {
+			return currentID, "download", true
+		}
+	}
+
+	return 0, "", false
+}
+
+func (m buildModel) isFeaturedActive() bool {
+	if m.featuredKind == "build" {
+		_, ok := m.builds[m.featuredID]
+		return ok
+	}
+	_, ok := m.downloads[m.featuredID]
+	return ok
+}
+
+func (m buildModel) formatFeaturedItem() string {
+	if m.featuredKind == "build" {
+		if b, ok := m.builds[m.featuredID]; ok {
+			return b.String()
+		}
+	} else {
+		if d, ok := m.downloads[m.featuredID]; ok {
+			return d.String()
+		}
+	}
+	return ""
+}
+
+func (m buildModel) handleEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 	switch ev.Action() {
 	case nix.ActionTypeStart:
 		return m.handleStartEvent(ev)
 	case nix.ActionTypeStop:
-		event := ev.(nix.StopEvent)
-		return m.handleStopEvent(event)
+		return m.handleStopEvent(ev.(nix.StopEvent))
 	case nix.ActionTypeResult:
 		return m.handleResultEvent(ev)
 	case nix.ActionTypeMessage:
-		event := ev.(nix.MessageEvent)
-
-		// error
-		if event.Level == 0 {
-			// Lix does not have builtins.warn, this means warnings are logged at log level error
-			traceWarning := strings.HasPrefix(event.Text, "trace: ") && strings.Contains(event.Text, "warning:")
-			if !traceWarning {
-				m.errs = append(m.errs, errors.New(event.Text))
-				return m, nil
-			}
-		}
-
-		// Just display the message
-		if m.verbose {
-			cmd = tea.Printf("%s", event.Text)
-		} else {
-			m.lastMsg = event.Text
-		}
+		return m.handleMessageEvent(ev.(nix.MessageEvent))
 	}
-	return m, cmd
+	return m, nil
 }
 
 func (m buildModel) handleStartEvent(ev nix.Event) (tea.Model, tea.Cmd) {
@@ -164,6 +259,11 @@ func (m buildModel) handleStartEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 	case nix.StartCopyPathEvent:
 		m.downloads[ev.ID] = &copy{name: extractName(ev.Path)}
 
+		// Feature this item immediately if nothing else is featured (via command for purity)
+		if m.featuredID == 0 {
+			return m, featureCmd(ev.ID, "download")
+		}
+
 		if m.verbose {
 			return m, tea.Println(ev.Text)
 		}
@@ -173,12 +273,16 @@ func (m buildModel) handleStartEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 		if _, ok := m.downloads[ev.Parent]; !ok {
 			return m, nil
 		}
-
 		m.transfers[ev.ID] = ev.Parent
 		return m, nil
 
 	case nix.StartBuildEvent:
 		m.builds[ev.ID] = &build{name: strings.TrimSuffix(extractName(ev.Path), ".drv")}
+
+		// Feature this item immediately if nothing else is featured (via command for purity)
+		if m.featuredID == 0 {
+			return m, featureCmd(ev.ID, "build")
+		}
 		return m, nil
 	}
 
@@ -186,28 +290,28 @@ func (m buildModel) handleStartEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 }
 
 func (m buildModel) handleStopEvent(ev nix.StopEvent) (tea.Model, tea.Cmd) {
-	// First check if ID is build
-	if _, ok := m.builds[ev.ID]; ok {
-		// Remove from builds map
-		delete(m.builds, ev.ID)
-	}
+	// Remove from tracking maps
+	delete(m.builds, ev.ID)
+	delete(m.transfers, ev.ID)
 
-	// Then check if it's a download
 	if d, ok := m.downloads[ev.ID]; ok {
-		// Add to realise progress
 		m.realiseProgress.done += d.total
-		// Remove from downloads map
 		delete(m.downloads, ev.ID)
 	}
 
-	// Finally we want to also clean up transfer parent mapping
-	if _, ok := m.transfers[ev.ID]; ok {
-		// Remove parent mapping
-		delete(m.transfers, ev.ID)
+	// If featured item stopped, rotate immediately (via command to capture time)
+	if m.featuredID == ev.ID {
+		if nextID, nextKind, ok := m.selectNextActive(); ok {
+			return m, featureCmd(nextID, nextKind)
+		}
+		// Nothing left to feature
+		m.featuredID = 0
+		if !m.verbose {
+			m.lastMsg = ""
+		}
 	}
 
-	// Clear last message if all builds and downloads have stopped,
-	// but only after initialization
+	// Clear message if all done
 	if m.initialized && len(m.builds) < 1 && len(m.downloads) < 1 {
 		m.lastMsg = ""
 	}
@@ -220,16 +324,19 @@ func (m buildModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 	case nix.ResultSetPhaseEvent:
 		b, ok := m.builds[ev.ID]
 		if !ok {
-			// Not found, ignore event
 			return m, nil
 		}
 
 		b.phase = ev.Phase
-		m.lastMsg = b.String()
+
+		// Update display immediately if this is the featured build
+		if m.featuredID == ev.ID && m.featuredKind == "build" {
+			m.lastMsg = b.String()
+		}
 		return m, nil
 
 	case nix.ResultProgressEvent:
-		// Check if the event ID is a CopyPaths or Builds event
+		// Aggregate progress updates
 		if ev.ID == m.copyPathsProgress.id {
 			m.copyPathsProgress = progress{
 				id:       ev.ID,
@@ -248,7 +355,7 @@ func (m buildModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Otherwise we check if it's a transfer
+		// File transfer progress
 		parent, ok := m.transfers[ev.ID]
 		if !ok {
 			return m, nil
@@ -262,11 +369,13 @@ func (m buildModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 		d.done = ev.Done
 		d.total = ev.Expected
 
-		m.lastMsg = d.String()
+		// Update display immediately if this is the featured download
+		if m.featuredID == parent && m.featuredKind == "download" {
+			m.lastMsg = d.String()
+		}
 		return m, nil
 
 	case nix.ResultSetExpectedFileTransferEvent:
-		// Check if event ID matches realise progress
 		if ev.ID == m.realiseProgress.id {
 			m.realiseProgress.expected = ev.Expected
 			return m, nil
@@ -274,7 +383,6 @@ func (m buildModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 
 	case nix.ResultBuildLogLineEvent:
 		if m.verbose {
-			// Try to find build
 			if b, ok := m.builds[ev.ID]; ok {
 				return m, tea.Printf(
 					"%s %s",
@@ -288,6 +396,23 @@ func (m buildModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	return m, nil
+}
+
+func (m buildModel) handleMessageEvent(ev nix.MessageEvent) (tea.Model, tea.Cmd) {
+	if ev.Level == 0 {
+		traceWarning := strings.HasPrefix(ev.Text, "trace: ") && strings.Contains(ev.Text, "warning:")
+		if !traceWarning {
+			m.errs = append(m.errs, errors.New(ev.Text))
+			return m, nil
+		}
+	}
+
+	if m.verbose {
+		return m, tea.Printf("%s", ev.Text)
+	}
+
+	m.lastMsg = ev.Text
 	return m, nil
 }
 
@@ -350,8 +475,13 @@ func (m buildModel) progressView() string {
 			strb.WriteString(i.text)
 		}
 	} else {
-		if m.lastMsg != "" {
-			strb.WriteString(fmt.Sprintf("%s%s\n", m.spinner.View(), m.lastMsg))
+		// Show featured item with spinner
+		if m.featuredID != 0 {
+			if display := m.formatFeaturedItem(); display != "" {
+				fmt.Fprintf(strb, "%s%s\n", m.spinner.View(), display)
+			}
+		} else if m.lastMsg != "" {
+			fmt.Fprintf(strb, "%s%s\n", m.spinner.View(), m.lastMsg)
 		}
 	}
 
@@ -369,8 +499,8 @@ func (m buildModel) progressView() string {
 		SetString("Downloads:").
 		String()
 
-	strb.WriteString(fmt.Sprintf("%s | %s\n", bhdr, dhdr))
-	strb.WriteString(fmt.Sprintf("%s | %s\n", builds, downloads))
+	fmt.Fprintf(strb, "%s | %s\n", bhdr, dhdr)
+	fmt.Fprintf(strb, "%s | %s\n", builds, downloads)
 
 	return strb.String()
 }
@@ -414,7 +544,6 @@ func fmtDownloads(m buildModel) string {
 		).
 		String()
 
-	// Format realise progress
 	rTotal, unit := util.ConvertBytes(m.realiseProgress.expected)
 	rDone := util.ConvertBytesToUnit(m.realiseProgress.done+m.downloads.done(), unit)
 	rProgress := fmt.Sprintf("[%.2f/%.2f %s]", rDone, rTotal, unit)

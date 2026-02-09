@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/util"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// Minimum time an item remains featured before rotating to the next
+const minFeatureDuration = 100 * time.Millisecond
 
 type tuiModel interface {
 	tea.Model
@@ -155,4 +159,28 @@ func (c copies) String() string {
 	done := util.ConvertBytesToUnit(c.done(), unit)
 
 	return fmt.Sprintf("[%.2f/%.2f %s]", done, total, unit)
+}
+
+// rotationCheckMsg carries the current time to avoid calling time.Now() in Update
+type rotationCheckMsg time.Time
+
+// featureMsg carries the timestamp from the command to keep Update pure
+type featureMsg struct {
+	id   int64
+	kind string // "build" or "download"
+	at   time.Time
+}
+
+// featureCmd captures the current time in a command (side-effect isolated)
+func featureCmd(id int64, kind string) tea.Cmd {
+	return func() tea.Msg {
+		return featureMsg{id: id, kind: kind, at: time.Now()}
+	}
+}
+
+// scheduleRotationCheck creates a delayed tick for the rotation checker
+func scheduleRotationCheck() tea.Cmd {
+	return tea.Tick(minFeatureDuration, func(t time.Time) tea.Msg {
+		return rotationCheckMsg(t)
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/util"
@@ -42,6 +43,11 @@ type copyModel struct {
 	lastMsg string
 
 	err error
+
+	// Featured item tracking (pure: times come from Msgs only)
+	featuredID      int64
+	featuredSince   time.Time
+	rotationPending bool
 }
 
 func initCopyModel(verbose bool) copyModel {
@@ -57,6 +63,8 @@ func initCopyModel(verbose bool) copyModel {
 		copies:            map[int64]*copy{},
 		transfers:         map[int64]int64{},
 		lastMsg:           "Initializing...",
+		featuredID:        0,
+		rotationPending:   false,
 	}
 }
 
@@ -65,7 +73,16 @@ func (m copyModel) error() error {
 }
 
 func (m copyModel) Init() tea.Cmd {
-	return m.spinner.Tick
+	return tea.Batch(
+		m.spinner.Tick,
+		m.scheduleRotationCheck(),
+	)
+}
+
+func (m copyModel) scheduleRotationCheck() tea.Cmd {
+	return tea.Tick(minFeatureDuration, func(t time.Time) tea.Msg {
+		return rotationCheckMsg(t)
+	})
 }
 
 func (m copyModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -80,6 +97,41 @@ func (m copyModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 
+	case rotationCheckMsg:
+		now := time.Time(msg)
+		m.rotationPending = false
+		var cmd tea.Cmd
+
+		// Rotate if minimum hold time passed
+		if m.featuredID != 0 && now.Sub(m.featuredSince) >= minFeatureDuration {
+			if nextID, ok := m.selectNextActive(); ok {
+				m.featuredID = nextID
+				m.featuredSince = now
+				m.lastMsg = m.formatFeaturedItem()
+			} else if _, exists := m.copies[m.featuredID]; !exists {
+				// Current item gone, no replacement
+				m.featuredID = 0
+				if !m.verbose {
+					m.lastMsg = ""
+				}
+			}
+		}
+
+		// Reschedule if work remains
+		if len(m.copies) > 0 {
+			m.rotationPending = true
+			cmd = m.scheduleRotationCheck()
+		}
+
+		return m, cmd
+
+	case featureMsg:
+		// New item featured (from start or immediate rotation)
+		m.featuredID = msg.id
+		m.featuredSince = msg.at
+		m.lastMsg = m.formatFeaturedItem()
+		return m, nil
+
 	case nix.Event:
 		return m.handleEvent(msg)
 	}
@@ -87,32 +139,43 @@ func (m copyModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// selectNextActive is pure: no side effects, no time calls
+func (m copyModel) selectNextActive() (int64, bool) {
+	currentID := m.featuredID
+
+	// Simple round-robin: pick any other active copy
+	for id := range m.copies {
+		if id != currentID {
+			return id, true
+		}
+	}
+
+	// If current still exists, keep it
+	if _, exists := m.copies[currentID]; exists {
+		return currentID, true
+	}
+
+	return 0, false
+}
+
+func (m copyModel) formatFeaturedItem() string {
+	if c, ok := m.copies[m.featuredID]; ok {
+		return c.String()
+	}
+	return ""
+}
+
 func (m copyModel) handleEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 	switch ev.Action() {
 	case nix.ActionTypeStart:
 		return m.handleStartEvent(ev)
 	case nix.ActionTypeStop:
-		event := ev.(nix.StopEvent)
-		return m.handleStopEvent(event)
+		return m.handleStopEvent(ev.(nix.StopEvent))
 	case nix.ActionTypeResult:
 		return m.handleResultEvent(ev)
 	case nix.ActionTypeMessage:
-		event := ev.(nix.MessageEvent)
-
-		// error
-		if event.Level == 0 {
-			m.err = errors.New(event.Text)
-			return m, nil
-		}
-
-		// Just display the message
-		if m.verbose {
-			return m, tea.Printf("%s", event.Text)
-		} else {
-			m.lastMsg = event.Text
-		}
+		return m.handleMessageEvent(ev.(nix.MessageEvent))
 	}
-
 	return m, nil
 }
 
@@ -129,6 +192,12 @@ func (m copyModel) handleStartEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 	case nix.StartCopyPathEvent:
 		m.copies[ev.ID] = &copy{name: ev.Path}
 
+		// Feature immediately if nothing else featured (via command for purity)
+		if m.featuredID == 0 {
+			// Empty string for kind since copies only have one type
+			return m, featureCmd(ev.ID, "")
+		}
+
 		if m.verbose {
 			return m, tea.Println(ev.Text)
 		}
@@ -138,7 +207,6 @@ func (m copyModel) handleStartEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 		if _, ok := m.copies[ev.Parent]; !ok {
 			return m, nil
 		}
-
 		m.transfers[ev.ID] = ev.Parent
 		return m, nil
 	}
@@ -149,10 +217,9 @@ func (m copyModel) handleStartEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 func (m copyModel) handleStopEvent(ev nix.StopEvent) (tea.Model, tea.Cmd) {
 	// Check if it's a copy
 	if c, ok := m.copies[ev.ID]; ok {
-		// Add to transfer progress
 		m.transferProgress.done += c.total
-		// Remove from copies map
 		delete(m.copies, ev.ID)
+
 		if m.verbose {
 			m.lastMsg = ""
 			return m, tea.Printf(
@@ -166,14 +233,23 @@ func (m copyModel) handleStopEvent(ev nix.StopEvent) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Finally we want to also clean up transfer parent mapping
+	// Clean up transfer parent mapping
 	if _, ok := m.transfers[ev.ID]; ok {
-		// Remove parent mapping
 		delete(m.transfers, ev.ID)
 	}
 
-	// Clear last message if all builds and downloads have stopped,
-	// but only after initialization
+	// If featured item stopped, rotate immediately
+	if m.featuredID == ev.ID {
+		if nextID, ok := m.selectNextActive(); ok {
+			return m, featureCmd(nextID, "")
+		}
+		m.featuredID = 0
+		if !m.verbose {
+			m.lastMsg = ""
+		}
+	}
+
+	// Clear last message if all done
 	if m.initialized && len(m.copies) < 1 {
 		m.lastMsg = ""
 	}
@@ -184,7 +260,7 @@ func (m copyModel) handleStopEvent(ev nix.StopEvent) (tea.Model, tea.Cmd) {
 func (m copyModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 	switch ev := ev.(type) {
 	case nix.ResultProgressEvent:
-		// Check if the event ID is a CopyPaths event
+		// Check if the event ID is a CopyPaths aggregate event
 		if ev.ID == m.copyPathsProgress.id {
 			m.copyPathsProgress.done = int(ev.Done)
 			m.copyPathsProgress.expected = int(ev.Expected)
@@ -192,7 +268,7 @@ func (m copyModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Otherwise we check if it's a transfer
+		// Otherwise check if it's a transfer
 		var c *copy
 		if co, ok := m.copies[ev.ID]; ok {
 			c = co
@@ -208,16 +284,32 @@ func (m copyModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 			c.done = ev.Done
 			c.total = ev.Expected
 
-			m.lastMsg = c.String()
+			// Only update display if this is the featured copy
+			if m.featuredID == ev.ID || (c == m.copies[m.featuredID]) {
+				m.lastMsg = c.String()
+			}
 		}
 
 	case nix.ResultSetExpectedCopyPathEvent:
-		// Check if event ID matches realise progress
 		if ev.ID == m.transferProgress.id {
 			m.transferProgress.expected = ev.Expected
 			return m, nil
 		}
 	}
+	return m, nil
+}
+
+func (m copyModel) handleMessageEvent(ev nix.MessageEvent) (tea.Model, tea.Cmd) {
+	if ev.Level == 0 {
+		m.err = errors.New(ev.Text)
+		return m, nil
+	}
+
+	if m.verbose {
+		return m, tea.Printf("%s", ev.Text)
+	}
+
+	m.lastMsg = ev.Text
 	return m, nil
 }
 
@@ -256,9 +348,7 @@ func (m copyModel) progressView() string {
 			l := (len(msg) - width) + len(p)
 			msg = fmt.Sprintf("%s%s", p, msg[l:])
 		}
-		strb.WriteString(
-			fmt.Sprintf("%s%s\n", m.spinner.View(), msg),
-		)
+		fmt.Fprintf(strb, "%s%s\n", m.spinner.View(), msg)
 	}
 
 	transfers := fmtTransfers(m)
@@ -269,8 +359,8 @@ func (m copyModel) progressView() string {
 		SetString("Transfers:").
 		String()
 
-	strb.WriteString(fmt.Sprintf("%s\n", hdr))
-	strb.WriteString(fmt.Sprintf("%s\n", transfers))
+	fmt.Fprintf(strb, "%s\n", hdr)
+	fmt.Fprintf(strb, "%s\n", transfers)
 
 	return strb.String()
 }
@@ -295,7 +385,6 @@ func fmtTransfers(m copyModel) string {
 		).
 		String()
 
-	// Format transfer progress
 	rTotal, unit := util.ConvertBytes(m.transferProgress.expected)
 	rDone := util.ConvertBytesToUnit(m.transferProgress.done+m.copies.done(), unit)
 	rProgress := fmt.Sprintf("[%.2f/%.2f %s]", rDone, rTotal, unit)
