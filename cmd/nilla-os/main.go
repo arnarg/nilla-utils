@@ -416,12 +416,12 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 	if err := diff.Execute(
 		&diff.Generation{
-			Path:     CURRENT_PROFILE,
-			Executor: target,
+			Path:    CURRENT_PROFILE,
+			Querier: diff.NewExecutorQuerier(target),
 		},
 		&diff.Generation{
-			Path:     string(out),
-			Executor: newBuildExecutor,
+			Path:    string(out),
+			Querier: diff.NewExecutorQuerier(newBuildExecutor),
 		},
 	); err != nil {
 		log.Debugf("Diff execution failed with error: %v", err)
@@ -455,10 +455,10 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		if buildTarget != "" && buildTarget == cmd.String("target") {
 			log.Debugf("Skipping copy: build and deploy are on the same host (%s)", buildTarget)
 		} else {
-		fmt.Fprintln(os.Stderr)
-		printSection("Copying system to target")
+			fmt.Fprintln(os.Stderr)
+			printSection("Copying system to target")
 
-		// Copy system closure
+			// Copy system closure
 			copyArgs := []string{
 				"--to", fmt.Sprintf("ssh://%s", cmd.String("target")),
 			}
@@ -475,13 +475,13 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 			nixCopyCmd := nix.Command("copy").
 				Args(copyArgs).
-			Executor(builder)
-		if !cmd.Bool("raw") {
-			nixCopyCmd = nixCopyCmd.Reporter(tui.NewCopyReporter(cmd.Bool("verbose")))
-		}
-		_, err := nixCopyCmd.Run(ctx)
-		if err != nil {
-			return err
+				Executor(builder)
+			if !cmd.Bool("raw") {
+				nixCopyCmd = nixCopyCmd.Reporter(tui.NewCopyReporter(cmd.Bool("verbose")))
+			}
+			_, err := nixCopyCmd.Run(ctx)
+			if err != nil {
+				return err
 			}
 		}
 	}

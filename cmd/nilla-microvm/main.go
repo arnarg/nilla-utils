@@ -403,12 +403,12 @@ func updateMicroVM(ctx context.Context, cmd *cli.Command) error {
 			localExec := exec.NewLocalExecutor()
 			if err := diff.Execute(
 				&diff.Generation{
-					Path:     oldSystemPath,
-					Executor: localExec,
+					Path:    oldSystemPath,
+					Querier: diff.NewExecutorQuerier(localExec),
 				},
 				&diff.Generation{
-					Path:     newSystemPath,
-					Executor: localExec,
+					Path:    newSystemPath,
+					Querier: diff.NewExecutorQuerier(localExec),
 				},
 			); err != nil {
 				log.Warnf("Failed to show diff: %v", err)

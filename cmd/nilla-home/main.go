@@ -298,7 +298,6 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		log.Debugf("Remote build enabled, target: %s, store: %s", buildTarget, storeAddress)
 	}
 
-
 	//
 	// Home Manager configuration build
 	//
@@ -411,12 +410,12 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 
 	if err := diff.Execute(
 		&diff.Generation{
-			Path:     currentPath,
-			Executor: currentExecutor,
+			Path:    currentPath,
+			Querier: diff.NewExecutorQuerier(currentExecutor),
 		},
 		&diff.Generation{
-			Path:     string(out),
-			Executor: newBuildExecutor,
+			Path:    string(out),
+			Querier: diff.NewExecutorQuerier(newBuildExecutor),
 		},
 	); err != nil {
 		log.Debugf("Diff execution failed with error: %v", err)
