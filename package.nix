@@ -1,11 +1,9 @@
 {
   lib,
   buildGoApplication,
-  nvd,
-  makeWrapper,
 }:
 let
-  version = "0.0.0-alpha.19";
+  version = "0.0.0-alpha.20";
 in
 buildGoApplication {
   inherit version;
@@ -26,13 +24,6 @@ buildGoApplication {
     "cmd/nilla-home"
     "cmd/nilla-microvm"
   ];
+
   ldflags = [ "-X main.version=${version}" ];
-
-  nativeBuildInputs = [ makeWrapper ];
-
-  postInstall = ''
-    wrapProgram $out/bin/nilla-os --prefix PATH : ${lib.makeBinPath [ nvd ]}
-    wrapProgram $out/bin/nilla-home --prefix PATH : ${lib.makeBinPath [ nvd ]}
-    wrapProgram $out/bin/nilla-microvm --prefix PATH : ${lib.makeBinPath [ nvd ]}
-  '';
 }
