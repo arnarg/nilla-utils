@@ -400,18 +400,22 @@ func (m buildModel) handleResultEvent(ev nix.Event) (tea.Model, tea.Cmd) {
 }
 
 func (m buildModel) handleMessageEvent(ev nix.MessageEvent) (tea.Model, tea.Cmd) {
-	if ev.Level == 0 {
-		traceWarning := strings.HasPrefix(ev.Text, "trace: ") && strings.Contains(ev.Text, "warning:")
-		if !traceWarning {
-			m.errs = append(m.errs, errors.New(ev.Text))
-			return m, nil
-		}
+	// Detect trace warnings (Lix sends all messages with error level 0)
+	isTraceWarning := strings.HasPrefix(ev.Text, "trace: ") &&
+		strings.Contains(ev.Text, "warning:")
+
+	// Level 0 errors that aren't trace warnings are actual errors
+	if ev.Level == nix.MsgLevelError && !isTraceWarning {
+		m.errs = append(m.errs, errors.New(ev.Text))
+		return m, nil
 	}
 
-	if m.verbose {
-		return m, tea.Printf("%s", ev.Text)
+	// Print immediately for: verbose mode, warnings (level 1), or trace warnings
+	if m.verbose || ev.Level == nix.MsgLevelWarning || isTraceWarning {
+		return m, tea.Printf("%s", util.TrimSpaceAnsi(ev.Text))
 	}
 
+	// Non-verbose, non-warning messages: display next to spinner
 	m.lastMsg = ev.Text
 	return m, nil
 }

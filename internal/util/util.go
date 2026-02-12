@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
@@ -193,4 +194,42 @@ func BuildStoreAddress(user, hostname string) string {
 		user = GetUser()
 	}
 	return fmt.Sprintf("ssh-ng://%s@%s", user, hostname)
+}
+
+// TrimSpaceAnsi combines strings.TrimSpace with ANSI-aware newline removal
+func TrimSpaceAnsi(s string) string {
+	if !strings.ContainsRune(s, '\x1b') {
+		return strings.TrimSpace(s)
+	}
+
+	// Work backwards to find content end, skipping trailing ANSI
+	end := len(s)
+	for end > 0 {
+		// Skip trailing whitespace
+		for end > 0 && unicode.IsSpace(rune(s[end-1])) {
+			end--
+		}
+
+		// Check for ANSI sequence at this position
+		if end > 2 && s[end-1] == 'm' {
+			// Scan backwards for '[' then ESC
+			seqStart := end - 2
+			for seqStart > 0 && ((s[seqStart] >= '0' && s[seqStart] <= '9') || s[seqStart] == ';') {
+				seqStart--
+			}
+			if seqStart > 0 && s[seqStart] == '[' && s[seqStart-1] == '\x1b' {
+				end = seqStart - 1 // Position before ESC
+				continue           // Check for more whitespace/ANSI
+			}
+		}
+		break
+	}
+
+	// Trim leading space normally
+	start := 0
+	for start < end && unicode.IsSpace(rune(s[start])) {
+		start++
+	}
+
+	return s[start:end]
 }

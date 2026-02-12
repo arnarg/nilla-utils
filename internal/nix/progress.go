@@ -187,6 +187,12 @@ func (e StopEvent) Action() ActionType {
 	return ActionTypeStop
 }
 
+// Message log levels.
+const (
+	MsgLevelError   = 0
+	MsgLevelWarning = 1
+)
+
 // MessageEvent is an event containing a log message.
 type MessageEvent struct {
 	Text  string
