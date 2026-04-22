@@ -14,6 +14,7 @@ import (
 	"github.com/arnarg/nilla-utils/internal/util"
 	"github.com/charmbracelet/log"
 	"github.com/kevinburke/ssh_config"
+	"github.com/muesli/cancelreader"
 	"github.com/skeema/knownhosts"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -68,7 +69,7 @@ func (e *sshExecutor) CommandContext(ctx context.Context, cmd string, args ...st
 		return nil, err
 	}
 
-	return &sshCommand{sess, cmd, args, -1, nil, ctx}, nil
+	return &sshCommand{sess: sess, cmd: cmd, args: args, fd: -1, ctx: ctx}, nil
 }
 
 func (e *sshExecutor) PathExists(path string) (bool, error) {
@@ -96,9 +97,10 @@ type sshCommand struct {
 	cmd  string
 	args []string
 
-	fd    int
-	state *term.State
-	ctx   context.Context
+	fd      int
+	state   *term.State
+	cancelR cancelreader.CancelReader
+	ctx     context.Context
 }
 
 func (c *sshCommand) SetStdin(r io.Reader) {
@@ -149,16 +151,23 @@ func (c *sshCommand) Start() error {
 
 		// Request pseudo terminal
 		if f, ok := c.sess.Stdin.(*os.File); ok {
-			fileDescriptor := int(f.Fd())
-			if term.IsTerminal(fileDescriptor) {
-				state, err := term.MakeRaw(fileDescriptor)
+			fd := int(f.Fd())
+			if term.IsTerminal(fd) {
+				cr, err := cancelreader.NewReader(f)
+				if err != nil {
+					return err
+				}
+				c.cancelR = cr
+				c.sess.Stdin = cr
+
+				state, err := term.MakeRaw(fd)
 				if err != nil {
 					return err
 				}
 				c.state = state
-				c.fd = fileDescriptor
+				c.fd = fd
 
-				termWidth, termHeight, err := term.GetSize(fileDescriptor)
+				termWidth, termHeight, err := term.GetSize(fd)
 				if err != nil {
 					return err
 				}
@@ -213,6 +222,11 @@ func (c *sshCommand) Wait() error {
 }
 
 func (c *sshCommand) cleanup() {
+	if c.cancelR != nil {
+		c.cancelR.Cancel()
+		c.cancelR.Close()
+		c.cancelR = nil
+	}
 	if c.state != nil {
 		term.Restore(c.fd, c.state)
 		c.state = nil

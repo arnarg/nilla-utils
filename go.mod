@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/log v0.4.1
 	github.com/go-test/deep v1.1.1
 	github.com/kevinburke/ssh_config v1.2.0
+	github.com/muesli/cancelreader v0.2.2
 	github.com/skeema/knownhosts v1.3.1
 	github.com/sourcegraph/conc v0.3.0
 	github.com/urfave/cli/v3 v3.1.1
@@ -32,7 +33,6 @@ require (
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
-	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
