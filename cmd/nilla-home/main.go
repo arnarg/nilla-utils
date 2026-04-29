@@ -9,6 +9,7 @@ import (
 	gexec "os/exec"
 	"strings"
 
+	"github.com/arnarg/nilla-utils/internal/askpass"
 	"github.com/arnarg/nilla-utils/internal/diff"
 	"github.com/arnarg/nilla-utils/internal/exec"
 	"github.com/arnarg/nilla-utils/internal/generation"
@@ -184,6 +185,21 @@ var app = &cli.Command{
 		},
 	},
 	Action: func(ctx context.Context, cmd *cli.Command) error {
+		if socket := os.Getenv("NILLA_ASKPASS_SOCKET"); socket != "" {
+			commandID := os.Getenv("NILLA_ASKPASS_COMMAND_ID")
+			var prompt string
+			if len(os.Args) > 1 {
+				prompt = os.Args[len(os.Args)-1]
+			}
+			host := askpass.ParseHostFromPrompt(prompt)
+			password, err := askpass.GetPassword(socket, host, commandID)
+			if err != nil {
+				return err
+			}
+			fmt.Println(password)
+			return nil
+		}
+
 		if cmd.Args().Len() < 1 {
 			cli.ShowAppHelp(cmd)
 		}
@@ -318,6 +334,22 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		nargs = append(nargs, "--no-link")
 	}
 
+	// Create shared password cache
+	pwCache := askpass.NewPasswordCache()
+
+	// Start askpass server if any remote SSH operations are needed
+	var askpassSrv *askpass.Server
+	if buildTarget != "" || cmd.String("target") != "" {
+		srv, cleanup, err := askpass.NewServer(pwCache)
+		if err != nil {
+			return err
+		}
+		askpassSrv = srv
+		defer cleanup()
+
+		go askpassSrv.Serve(ctx)
+	}
+
 	// Handle remote builds
 	if buildTarget != "" && storeAddress != "" {
 		// First, get the derivation path by evaluating the attribute
@@ -348,7 +380,7 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		}
 		copyCmd := nix.Command("copy").
 			Args(copyArgs).
-			Executor(builder)
+			Executor(exec.NewAskpassExec(askpassSrv.SocketPath(), "copy-derivation"))
 		if _, err := copyCmd.Run(ctx); err != nil {
 			return fmt.Errorf("failed to copy derivation to remote: %w", err)
 		}
@@ -358,10 +390,17 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 		nargs = append(nargs, "--eval-store", "auto")
 	}
 
+	// Determine executor for nix build
+	buildExec := builder
+	if buildTarget != "" && storeAddress != "" {
+		buildExec = exec.NewAskpassExec(askpassSrv.SocketPath(), "remote-build")
+	}
+
 	// Run nix build
 	printSection("Building configuration")
 	nixBuildCmd := nix.Command("build").
-		Args(nargs)
+		Args(nargs).
+		Executor(buildExec)
 
 	if !cmd.Bool("raw") {
 		nixBuildCmd = nixBuildCmd.Reporter(tui.NewBuildReporter(cmd.Bool("verbose")))
@@ -379,7 +418,7 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	//
 	if cmd.String("target") != "" {
 		log.Debugf("Setting up SSH executor for target: %s", cmd.String("target"))
-		target, err = exec.NewSSHExecutor(cmd.String("target"))
+		target, err = exec.NewSSHExecutor(cmd.String("target"), pwCache)
 		if err != nil {
 			log.Debugf("Failed to create SSH executor: %v", err)
 			return fmt.Errorf("failed to create SSH executor: %w", err)
@@ -396,7 +435,7 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 	printSection("Comparing changes")
 
 	// Determine executors and paths for diff
-	newBuildExecutor, err := determineNewBuildExecutor(builder, target, buildTarget, storeAddress, cmd.String("target"))
+	newBuildExecutor, err := determineNewBuildExecutor(builder, target, buildTarget, storeAddress, cmd.String("target"), pwCache)
 	if err != nil {
 		return err
 	}
@@ -474,14 +513,12 @@ func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
 }
 
 // determineNewBuildExecutor selects the executor for the new build based on build location and target.
-func determineNewBuildExecutor(builder, target exec.Executor, buildTarget, storeAddress, targetStr string) (exec.Executor, error) {
+func determineNewBuildExecutor(builder, target exec.Executor, buildTarget, storeAddress, targetStr string, pwCache *askpass.PasswordCache) (exec.Executor, error) {
 	if buildTarget != "" && storeAddress != "" {
-		// Built remotely
 		if buildTarget == targetStr && targetStr != "" {
 			return target, nil
 		}
-		// Built on different host - create executor for build host
-		buildExecutor, err := exec.NewSSHExecutor(buildTarget)
+		buildExecutor, err := exec.NewSSHExecutor(buildTarget, pwCache)
 		if err != nil {
 			log.Debugf("Failed to create SSH executor for build target: %v", err)
 			return nil, fmt.Errorf("failed to create SSH executor for build target: %w", err)

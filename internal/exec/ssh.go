@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/arnarg/nilla-utils/internal/askpass"
 	"github.com/arnarg/nilla-utils/internal/util"
 	"github.com/charmbracelet/log"
 	"github.com/kevinburke/ssh_config"
@@ -30,9 +31,9 @@ type sshExecutor struct {
 	client *ssh.Client
 }
 
-func NewSSHExecutor(target string) (Executor, error) {
+func NewSSHExecutor(target string, cache *askpass.PasswordCache) (Executor, error) {
 	// Get config from target
-	host, conf, err := configFromTarget(target)
+	host, conf, err := configFromTarget(target, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +258,7 @@ func parseTarget(target string) (user string, host string, port string) {
 	return
 }
 
-func configFromTarget(target string) (string, *ssh.ClientConfig, error) {
+func configFromTarget(target string, cache *askpass.PasswordCache) (string, *ssh.ClientConfig, error) {
 	// Get user and host
 	user, host, port := parseTarget(target)
 
@@ -289,14 +290,20 @@ func configFromTarget(target string) (string, *ssh.ClientConfig, error) {
 	// Add password callback
 	isTerminal := term.IsTerminal(int(os.Stdin.Fd()))
 	if isTerminal {
+		hostKey := fmt.Sprintf("%s@%s", config.User, host)
 		config.Auth = append(
 			config.Auth,
 			ssh.PasswordCallback(func() (string, error) {
-				fmt.Printf("%s@%s's password:\n", config.User, host)
+				if pw, ok := cache.Get(hostKey); ok {
+					return pw, nil
+				}
+				fmt.Fprintf(os.Stderr, "%s's password: ", hostKey)
 				password, err := term.ReadPassword(int(os.Stdin.Fd()))
 				if err != nil {
 					return "", err
 				}
+				fmt.Fprintln(os.Stderr)
+				cache.Set(hostKey, string(password))
 				return string(password), nil
 			}),
 		)
