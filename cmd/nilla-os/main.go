@@ -4,14 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/arnarg/nilla-utils/internal/askpass"
-	"github.com/arnarg/nilla-utils/internal/diff"
-	"github.com/arnarg/nilla-utils/internal/exec"
+	"github.com/arnarg/nilla-utils/internal/deploy"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/project"
-	"github.com/arnarg/nilla-utils/internal/tui"
 	"github.com/arnarg/nilla-utils/internal/util"
 	"github.com/charmbracelet/log"
 	"github.com/urfave/cli/v3"
@@ -23,21 +20,9 @@ var description = `[name]  Name of the NixOS system to build. If left empty it w
 
 var verboseCount int
 
-type subCmd int
-
-const (
-	subCmdBuild subCmd = iota
-	subCmdTest
-	subCmdBoot
-	subCmdSwitch
-)
-
-const SYSTEM_PROFILE = "/nix/var/nix/profiles/system"
-const CURRENT_PROFILE = "/run/current-system"
-
-func actionFuncFor(sub subCmd) cli.ActionFunc {
+func actionFuncFor(sc deploy.Command) cli.ActionFunc {
 	return func(ctx context.Context, cmd *cli.Command) error {
-		return run(ctx, cmd, sub)
+		return run(ctx, cmd, sc)
 	}
 }
 
@@ -111,7 +96,7 @@ var app = &cli.Command{
 					Usage:   "Use path as prefix for the symlinks to the build results",
 				},
 			},
-			Action: actionFuncFor(subCmdBuild),
+			Action: actionFuncFor(deploy.Build),
 		},
 
 		// Test
@@ -127,7 +112,7 @@ var app = &cli.Command{
 					Usage:   "Do not ask for confirmation",
 				},
 			},
-			Action: actionFuncFor(subCmdTest),
+			Action: actionFuncFor(deploy.Test),
 		},
 
 		// Boot
@@ -143,7 +128,7 @@ var app = &cli.Command{
 					Usage:   "Do not ask for confirmation",
 				},
 			},
-			Action: actionFuncFor(subCmdBoot),
+			Action: actionFuncFor(deploy.Boot),
 		},
 
 		// Switch
@@ -159,7 +144,7 @@ var app = &cli.Command{
 					Usage:   "Do not ask for confirmation",
 				},
 			},
-			Action: actionFuncFor(subCmdSwitch),
+			Action: actionFuncFor(deploy.Switch),
 		},
 
 		// List
@@ -212,7 +197,7 @@ var app = &cli.Command{
 		},
 	},
 	Action: func(ctx context.Context, cmd *cli.Command) error {
-		// Askpass mode — invoked by ssh as SSH_ASKPASS
+		// Askpass mode, invoked by ssh as SSH_ASKPASS
 		if socket := os.Getenv("NILLA_ASKPASS_SOCKET"); socket != "" {
 			commandID := os.Getenv("NILLA_ASKPASS_COMMAND_ID")
 			// os.Args is ["nilla-os", "user@host's password: "] when invoked as SSH_ASKPASS
@@ -243,354 +228,33 @@ func printSection(text string) {
 	fmt.Fprintf(os.Stderr, "\033[32m>\033[0m %s\n", text)
 }
 
-func inferName(name string) (string, error) {
-	if name == "" {
-		hn, err := os.Hostname()
-		if err != nil {
-			return "", err
-		}
-		return hn, nil
-	}
-	return name, nil
-}
-
-func run(ctx context.Context, cmd *cli.Command, sc subCmd) error {
-	var builder, target exec.Executor
-
-	// Setup logger
+func run(ctx context.Context, cmd *cli.Command, sc deploy.Command) error {
 	util.InitLogger(verboseCount)
 
-	// Resolve project
-	source, err := project.Resolve(cmd.String("project"))
+	plan, err := deploy.ResolvePlan(deploy.Options{
+		ProjectPath: cmd.String("project"),
+		Name:        cmd.Args().First(),
+		SubCmd:      sc,
+		BuildOn:     cmd.String("build-on"),
+		BuildOnSelf: cmd.Bool("build-on-target"),
+		Target:      cmd.String("target"),
+		Raw:         cmd.Bool("raw"),
+		Verbose:     cmd.Bool("verbose"),
+		NoLink:      cmd.Bool("no-link"),
+		OutLink:     cmd.String("out-link"),
+		Confirm:     cmd.Bool("confirm"),
+	}, deploy.NixOSSystem{})
 	if err != nil {
 		return err
 	}
 
-	// Setup builder, which is always local
-	builder = exec.NewLocalExecutor()
-
-	// Try to infer name of the NixOS system
-	name, err := inferName(cmd.Args().First())
+	s, err := deploy.NewSession(ctx, plan, deploy.NixOSSystem{}, deploy.DefaultDeps())
 	if err != nil {
 		return err
 	}
+	defer s.Close()
 
-	// Attribute of NixOS configuration's toplevel
-	attr := fmt.Sprintf("systems.nixos.\"%s\".result.config.system.build.toplevel", name)
-
-	// Check if attribute exists
-	exists, err := nix.ExistsInProject(source.NillaPath, source.FixedOutputStoreEntry(), attr)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return fmt.Errorf("Attribute '%s' does not exist in project \"%s\"", attr, source.FullNillaPath())
-	}
-
-	log.Infof("Found system \"%s\"", name)
-
-	// Determine build location
-	var buildTarget string
-	if cmd.String("build-on") != "" {
-		buildTarget = cmd.String("build-on")
-	} else if cmd.Bool("build-on-target") {
-		buildTarget = cmd.String("target")
-		if buildTarget == "" {
-			return fmt.Errorf("--build-on-target requires --target to be specified")
-		}
-	}
-
-	// Validate and prepare remote build if enabled
-	var storeAddress string
-	if buildTarget != "" {
-		user, hostname := util.ParseTarget(buildTarget)
-		storeAddress = util.BuildStoreAddress(user, hostname)
-		log.Debugf("Remote build enabled, target: %s, store: %s", buildTarget, storeAddress)
-	}
-
-	//
-	// NixOS configuration build
-	//
-	// Build args for nix build
-	nargs := []string{"-f", source.FullNillaPath(), attr}
-
-	// Add extra args depending on the sub command
-	if sc == subCmdBuild {
-		if cmd.Bool("no-link") {
-			nargs = append(nargs, "--no-link")
-		}
-		if cmd.String("out-link") != "" {
-			nargs = append(nargs, "--out-link", cmd.String("out-link"))
-		}
-	} else {
-		// All sub-commands except build should not
-		// create a result link
-		nargs = append(nargs, "--no-link")
-	}
-
-	// Create shared password cache
-	pwCache := askpass.NewPasswordCache()
-
-	// Start askpass server if any remote SSH operations are needed
-	var askpassSrv *askpass.Server
-	if buildTarget != "" || cmd.String("target") != "" {
-		srv, cleanup, err := askpass.NewServer(pwCache)
-		if err != nil {
-			return err
-		}
-		askpassSrv = srv
-		defer cleanup()
-
-		go askpassSrv.Serve(ctx)
-	}
-
-	// Handle remote builds
-	if buildTarget != "" && storeAddress != "" {
-		// First, get the derivation path by evaluating the attribute
-		// We use nix eval to get the derivation path
-		printSection("Getting derivation path")
-		derivationAttr := fmt.Sprintf("%s.drvPath", attr)
-		evalArgs := []string{
-			"-f", source.FullNillaPath(),
-			derivationAttr,
-			"--raw",
-		}
-		evalCmd := nix.Command("eval").
-			Args(evalArgs).
-			Executor(builder)
-		derivationPath, err := evalCmd.Run(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get derivation path: %w", err)
-		}
-		derivationPathStr := strings.TrimSpace(string(derivationPath))
-
-		// Copy derivation to remote host
-		printSection("Copying derivation to remote host")
-		copyArgs := []string{
-			"--to", storeAddress,
-			"--derivation",
-			"-s", // fetch dependencies from target system's substituters
-			derivationPathStr,
-		}
-		copyCmd := nix.Command("copy").
-			Args(copyArgs).
-			Executor(exec.NewAskpassExec(askpassSrv.SocketPath(), "copy-derivation"))
-		if _, err := copyCmd.Run(ctx); err != nil {
-			return fmt.Errorf("failed to copy derivation to remote: %w", err)
-		}
-
-		// Add remote build flags
-		nargs = append(nargs, "--store", storeAddress)
-		nargs = append(nargs, "--eval-store", "auto")
-	}
-
-	// Debug: log the nix build arguments
-	log.Debugf("Nix build arguments: %v", nargs)
-
-	// Determine executor for nix build
-	buildExec := builder
-	if buildTarget != "" && storeAddress != "" {
-		buildExec = exec.NewAskpassExec(askpassSrv.SocketPath(), "remote-build")
-	}
-
-	// Run nix build
-	printSection("Building configuration")
-	nixBuildCmd := nix.Command("build").
-		Args(nargs).
-		Executor(buildExec)
-
-	if !cmd.Bool("raw") {
-		nixBuildCmd = nixBuildCmd.Reporter(tui.NewBuildReporter(cmd.Bool("verbose")))
-	}
-
-	out, err := nixBuildCmd.Run(ctx)
-	if err != nil {
-		log.Debugf("Nix build command failed with error: %v", err)
-		return fmt.Errorf("failed to build configuration: %w", err)
-	}
-	log.Debugf("Build completed successfully, output path: %s", string(out))
-
-	//
-	// Setup target executor (for deployment)
-	//
-	if cmd.String("target") != "" {
-		log.Debugf("Setting up SSH executor for target: %s", cmd.String("target"))
-		target, err = exec.NewSSHExecutor(cmd.String("target"), pwCache)
-		if err != nil {
-			log.Debugf("Failed to create SSH executor: %v", err)
-			return fmt.Errorf("failed to create SSH executor: %w", err)
-		}
-		log.Debugf("SSH executor created successfully")
-	} else {
-		target = builder
-	}
-
-	//
-	// Run generation diff using nvd
-	//
-	fmt.Fprintln(os.Stderr)
-	printSection("Comparing changes")
-
-	// If we built remotely, use remote executor for the new build (faster - no copy needed)
-	// Otherwise, use local executor for the new build
-	newBuildExecutor := builder
-	if buildTarget != "" && storeAddress != "" {
-		// If build target is same as deploy target, use deploy executor
-		// Otherwise, create a separate executor for the build target
-		if buildTarget == cmd.String("target") && cmd.String("target") != "" {
-			log.Debugf("Using remote executor for diff (both generations on remote, same as deploy target)")
-			newBuildExecutor = target
-		} else {
-			log.Debugf("Setting up SSH executor for build target: %s", buildTarget)
-			buildTargetExecutor, err := exec.NewSSHExecutor(buildTarget, pwCache)
-			if err != nil {
-				log.Debugf("Failed to create SSH executor for build target: %v", err)
-				return fmt.Errorf("failed to create SSH executor for build target: %w", err)
-			}
-			log.Debugf("Using remote executor for diff (new build on remote build target)")
-			newBuildExecutor = buildTargetExecutor
-		}
-	}
-
-	log.Debugf("Running diff: current=%s (executor=%T), new=%s (executor=%T)", CURRENT_PROFILE, target, string(out), newBuildExecutor)
-
-	if err := diff.Execute(
-		&diff.Generation{
-			Path:    CURRENT_PROFILE,
-			Querier: diff.NewExecutorQuerier(target),
-		},
-		&diff.Generation{
-			Path:    string(out),
-			Querier: diff.NewExecutorQuerier(newBuildExecutor),
-		},
-	); err != nil {
-		log.Debugf("Diff execution failed with error: %v", err)
-		return fmt.Errorf("failed to compare changes: %w", err)
-	}
-	log.Debugf("Diff execution completed successfully")
-
-	// Build can exit now
-	if sc == subCmdBuild {
-		return nil
-	}
-
-	//
-	// Ask Confirmation
-	//
-	if !cmd.Bool("confirm") {
-		doContinue, err := tui.RunConfirm("Do you want to continue?")
-		if err != nil {
-			return err
-		}
-		if !doContinue {
-			return nil
-		}
-	}
-
-	//
-	// Copy closure to target
-	//
-	if cmd.String("target") != "" {
-		// Skip copy if we built remotely on the same host as the deploy target
-		if buildTarget != "" && buildTarget == cmd.String("target") {
-			log.Debugf("Skipping copy: build and deploy are on the same host (%s)", buildTarget)
-		} else {
-			fmt.Fprintln(os.Stderr)
-			printSection("Copying system to target")
-
-			// Copy system closure
-			copyArgs := []string{
-				"--to", fmt.Sprintf("ssh://%s", cmd.String("target")),
-			}
-
-			// If we built remotely on a different host, copy from the build host
-			if buildTarget != "" && buildTarget != cmd.String("target") {
-				buildUser, buildHostname := util.ParseTarget(buildTarget)
-				buildStoreAddress := util.BuildStoreAddress(buildUser, buildHostname)
-				copyArgs = append(copyArgs, "--from", buildStoreAddress)
-				log.Debugf("Copying from build host %s to deploy target %s", buildTarget, cmd.String("target"))
-			}
-
-			copyArgs = append(copyArgs, string(out))
-
-			nixCopyCmd := nix.Command("copy").
-				Args(copyArgs).
-				Executor(exec.NewAskpassExec(askpassSrv.SocketPath(), "copy-closure"))
-			if !cmd.Bool("raw") {
-				nixCopyCmd = nixCopyCmd.Reporter(tui.NewCopyReporter(cmd.Bool("verbose")))
-			}
-			_, err := nixCopyCmd.Run(ctx)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	//
-	// Activate NixOS configuration
-	//
-	if sc == subCmdTest || sc == subCmdSwitch {
-		fmt.Fprintln(os.Stderr)
-		printSection("Activating configuration")
-
-		// Run switch_to_configuration
-		switchp := fmt.Sprintf("%s/bin/switch-to-configuration", out)
-		switchc, err := target.Command("sudo", switchp, "test")
-		if err != nil {
-			return err
-		}
-
-		switchc.SetStdin(os.Stdin)
-		switchc.SetStderr(os.Stderr)
-		switchc.SetStdout(os.Stdout)
-
-		// This error should be ignored during switch so that
-		// it can continue onto setting up the bootloader below
-		if err := switchc.Run(); err != nil && sc != subCmdSwitch {
-			return err
-		}
-	}
-
-	//
-	// Set NixOS configuration in bootloader
-	//
-	if sc == subCmdBoot || sc == subCmdSwitch {
-		fmt.Fprintln(os.Stderr)
-		printSection("Adding configuration to bootloader")
-
-		// Set profile
-		buildc, err := target.Command(
-			"sudo", "nix", "build",
-			"--no-link", "--profile", SYSTEM_PROFILE,
-			"--extra-experimental-features", "nix-command",
-			string(out),
-		)
-		if err != nil {
-			return err
-		}
-
-		buildc.SetStdin(os.Stdin)
-		buildc.SetStderr(os.Stderr)
-		buildc.SetStdout(os.Stdout)
-		if err := buildc.Run(); err != nil {
-			return err
-		}
-
-		// Run switch_to_configuration
-		switchp := fmt.Sprintf("%s/bin/switch-to-configuration", out)
-		switchc, err := target.Command("sudo", switchp, "boot")
-		if err != nil {
-			return err
-		}
-
-		switchc.SetStdin(os.Stdin)
-		switchc.SetStderr(os.Stderr)
-		switchc.SetStdout(os.Stdout)
-
-		return switchc.Run()
-	}
-
-	return nil
+	return s.Run(ctx)
 }
 
 func listConfigurations(ctx context.Context, cmd *cli.Command) error {
