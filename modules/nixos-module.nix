@@ -2,6 +2,21 @@
 # and generateNixPathFromInputs.
 inputs:
 { config, lib, ... }:
+let
+  nillaExtras =
+    if inputs ? nilla && inputs.nilla ? src then
+      let
+        npins = import "${inputs.nilla.src}/npins";
+      in
+      lib.optionalAttrs (npins ? lib && npins.lib ? outPath) { nilla-pin-lib.src = npins.lib.outPath; }
+      // lib.optionalAttrs (npins ? flake-compat && npins.flake-compat ? outPath) {
+        nilla-pin-flake-compat.src = npins.flake-compat.outPath;
+      }
+    else
+      { };
+
+  finalInputs = inputs // nillaExtras;
+in
 {
   options.nix = {
     generateRegistryFromInputs = lib.mkOption {
@@ -23,7 +38,7 @@ inputs:
         lib.mapAttrsToList (name: input: {
           name = "nix/inputs/${name}";
           value.source = input.src;
-        }) inputs
+        }) finalInputs
       )
     );
 
@@ -39,7 +54,7 @@ inputs:
             type = "path";
             path = input.src;
           };
-        }) inputs
+        }) finalInputs
       );
 
       # Add /etc/nix/inputs to NIX_PATH
