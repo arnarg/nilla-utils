@@ -14,6 +14,6 @@ in
   config = {
     inputs = builtins.mapAttrs (n: pin: {
       src = pin;
-    }) config.generators.inputs.pins;
+    }) (lib.attrs.filter (n: _: n != "__functor") config.generators.inputs.pins);
   };
 }
