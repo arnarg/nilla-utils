@@ -182,7 +182,7 @@ in
                     contents = readDir dir;
                   in
                   if (hasAttr "home" contents) && (contents.home == "directory") then
-                    filter (n: (builtins.match ".*\.nix" n != null) && (readDir "${dir}/home")."${n}" == "regular") (
+                    filter (n: (builtins.match ".*\\.nix" n != null) && (readDir "${dir}/home")."${n}" == "regular") (
                       attrNames (readDir "${dir}/home")
                     )
                   else
