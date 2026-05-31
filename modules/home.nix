@@ -1,15 +1,24 @@
-{ config }:
+{
+  config,
+}:
+
 let
   inherit (config) inputs lib;
   inherit (builtins)
+    attrNames
+    concatMap
+    filter
+    hasAttr
     listToAttrs
     mapAttrs
+    match
     pathExists
-    concatMap
+    readDir
     ;
 
   globalModules = config.modules;
 in
+
 {
   includes = [
     ./lib.nix
@@ -65,11 +74,11 @@ in
                 default.value =
                   let
                     src = config.home-manager.src;
-                    contents = builtins.readDir src;
+                    contents = readDir src;
                     directories = lib.attrs.filter (name: value: value == "directory") contents;
 
                     builder =
-                      if directories ? "lib" && (builtins.readDir "${src}/lib") ? "default.nix" then
+                      if directories ? "lib" && (readDir "${src}/lib") ? "default.nix" then
                         (import "${src}/lib" { inherit (config.pkgs) lib; }).homeManagerConfiguration
                       else
                         {
@@ -136,6 +145,12 @@ in
         description = "The folder to auto discover home-manager modules.";
         default.value = null;
       };
+
+      recursive = lib.options.create {
+        type = lib.types.bool;
+        default.value = false;
+        description = "Either for recursive search modules.";
+      };
     };
   };
 
@@ -158,7 +173,7 @@ in
         }
       ])
       ++ (lib.attrs.mapToList (name: value: {
-        assertion = !(builtins.isNull value.pkgs);
+        assertion = !(isNull value.pkgs);
         message = "A Nixpkgs instance is required for the home-manager configuration \"${name}\", but none was provided and \"inputs.nixpkgs\" does not exist.";
       }) config.systems.home);
 
@@ -167,13 +182,6 @@ in
       lib.modules.when (config.generators.home.folder != null && pathExists config.generators.home.folder)
         (
           let
-            inherit (builtins)
-              readDir
-              hasAttr
-              filter
-              attrNames
-              ;
-
             loadUsers' =
               dir:
               let
@@ -182,7 +190,7 @@ in
                     contents = readDir dir;
                   in
                   if (hasAttr "home" contents) && (contents.home == "directory") then
-                    filter (n: (builtins.match ".*\\.nix" n != null) && (readDir "${dir}/home")."${n}" == "regular") (
+                    filter (n: (match ".*\\.nix" n != null) && (readDir "${dir}/home")."${n}" == "regular") (
                       attrNames (readDir "${dir}/home")
                     )
                   else
@@ -279,7 +287,14 @@ in
         (config.generators.homeModules.folder != null && pathExists config.generators.homeModules.folder)
         (
           mapAttrs (_name: import) (
-            lib.utils.loadDirsWithFile "default.nix" config.generators.homeModules.folder
+            (
+              if config.generators.homeModules.recursive then
+                lib.utils.loadDirsWithFileRecursive
+              else
+                lib.utils.loadDirsWithFile
+            )
+              "default.nix"
+              config.generators.homeModules.folder
           )
         );
   };

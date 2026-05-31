@@ -2,6 +2,7 @@
 let
   inherit (config) lib;
   inherit (builtins)
+    foldl'
     readDir
     filter
     attrNames
@@ -33,6 +34,35 @@ in
         in
         (hasAttr file contents) && (contents.${file} == "regular")
       );
+
+    loadDirsCondRecursive =
+      f: dir: moduleName: baseDir:
+      let
+        contents = readDir dir;
+
+        hasFile = f dir moduleName;
+
+        currentResult = if hasFile then { ${moduleName} = dir; } else { };
+
+        subdirs = filter (n: contents."${n}" == "directory") (attrNames contents);
+
+        recursiveResults = foldl' (
+          acc: subdir: acc // (lib.utils.loadDirsCondRecursive f (dir + "/${subdir}") subdir baseDir)
+        ) { } subdirs;
+      in
+      currentResult // recursiveResults;
+
+    loadDirsWithFileRecursive =
+      file: baseDir:
+      let
+        checkDir =
+          d: n:
+          let
+            contents = readDir "${d}";
+          in
+          (hasAttr file contents) && (contents.${file} == "regular");
+      in
+      lib.utils.loadDirsCondRecursive checkDir baseDir "" "";
 
     loadHostsFromDir =
       dir: file:
