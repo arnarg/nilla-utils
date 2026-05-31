@@ -1,12 +1,15 @@
-{ config }:
+{
+  config,
+}:
+
 let
   inherit (config) inputs lib;
-  inherit (builtins) listToAttrs mapAttrs pathExists;
+  inherit (builtins) mapAttrs pathExists listToAttrs;
 
   globalModules = config.modules;
-
   nixosModule = import ./nixos-module.nix inputs;
 in
+
 {
   includes = [
     ./lib.nix
@@ -109,8 +112,14 @@ in
     generators.nixosModules = {
       folder = lib.options.create {
         type = lib.types.nullish lib.types.path;
-        description = "The folder to auto discover NixOS modules.";
         default.value = null;
+        description = "The folder to auto discover NixOS modules.";
+      };
+
+      recursive = lib.options.create {
+        type = lib.types.bool;
+        default.value = false;
+        description = "Either for recursive search modules.";
       };
     };
   };
@@ -134,7 +143,7 @@ in
         }
       ])
       ++ (lib.attrs.mapToList (name: value: {
-        assertion = !(builtins.isNull value.nixpkgs);
+        assertion = !(isNull value.nixpkgs);
         message = "A Nixpkgs instance is required for the NixOS system \"${name}\", but none was provided and \"inputs.nixpkgs\" does not exist.";
       }) config.systems.nixos);
 
@@ -174,7 +183,14 @@ in
         (config.generators.nixosModules.folder != null && pathExists config.generators.nixosModules.folder)
         (
           mapAttrs (_name: import) (
-            lib.utils.loadDirsWithFile "default.nix" config.generators.nixosModules.folder
+            (
+              if config.generators.nixosModules.recursive then
+                lib.utils.loadDirsWithFileRecursive
+              else
+                lib.utils.loadDirsWithFile
+            )
+              "default.nix"
+              config.generators.nixosModules.folder
           )
         );
   };
