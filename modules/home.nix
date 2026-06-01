@@ -1,7 +1,4 @@
-{
-  config,
-}:
-
+{ config }:
 let
   inherit (config) inputs lib;
   inherit (builtins)
@@ -18,7 +15,6 @@ let
 
   globalModules = config.modules;
 in
-
 {
   includes = [
     ./lib.nix

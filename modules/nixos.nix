@@ -1,7 +1,4 @@
-{
-  config,
-}:
-
+{ config }:
 let
   inherit (config) inputs lib;
   inherit (builtins) mapAttrs pathExists listToAttrs;
@@ -9,7 +6,6 @@ let
   globalModules = config.modules;
   nixosModule = import ./nixos-module.nix inputs;
 in
-
 {
   includes = [
     ./lib.nix

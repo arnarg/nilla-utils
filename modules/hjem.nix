@@ -1,7 +1,4 @@
-{
-  config,
-}:
-
+{ config }:
 let
   inherit (config) lib;
   inherit (builtins)
@@ -9,7 +6,6 @@ let
     pathExists
     ;
 in
-
 {
   includes = [
     ./lib.nix
@@ -33,17 +29,16 @@ in
 
   config = {
     # Generate hjem configurations from `generators.hjem`
-    modules.hjem = let
+    modules.hjem =
+      let
         loader =
-          if config.generators.hjemModules.recursive
-          then lib.utils.loadDirsWithFileRecursive
-          else lib.utils.loadDirsWithFile;
-      in lib.modules.when
-        (config.generators.hjemModules.folder != null && pathExists config.generators.hjemModules.folder)
-        (
-          mapAttrs (_name: import) (
-            loader "default.nix" config.generators.hjemModules.folder
-          )
-        );
+          if config.generators.hjemModules.recursive then
+            lib.utils.loadDirsWithFileRecursive
+          else
+            lib.utils.loadDirsWithFile;
+      in
+      lib.modules.when (
+        config.generators.hjemModules.folder != null && pathExists config.generators.hjemModules.folder
+      ) (mapAttrs (_name: import) (loader "default.nix" config.generators.hjemModules.folder));
   };
 }
