@@ -26,7 +26,7 @@ in
       recursive = lib.options.create {
         type = lib.types.bool;
         default.value = false;
-        description = "Either for recursive search modules.";
+        description = "Whether to recursively search for modules.";
       };
     };
   };
