@@ -33,19 +33,16 @@ in
 
   config = {
     # Generate hjem configurations from `generators.hjem`
-    modules.hjem =
-      lib.modules.when
+    modules.hjem = let
+        loader =
+          if config.generators.hjemModules.recursive
+          then lib.utils.loadDirsWithFileRecursive
+          else lib.utils.loadDirsWithFile;
+      in lib.modules.when
         (config.generators.hjemModules.folder != null && pathExists config.generators.hjemModules.folder)
         (
           mapAttrs (_name: import) (
-            (
-              if config.generators.hjemModules.recursive then
-                lib.utils.loadDirsWithFileRecursive
-              else
-                lib.utils.loadDirsWithFile
-            )
-              "default.nix"
-              config.generators.hjemModules.folder
+            loader "default.nix" config.generators.hjemModules.folder
           )
         );
   };
