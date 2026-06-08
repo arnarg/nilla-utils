@@ -112,6 +112,11 @@ in
         description = "The folder to auto discover NixOS modules.";
         default.value = null;
       };
+      recursive = lib.options.create {
+        type = lib.types.bool;
+        default.value = false;
+        description = "Whether to recursively search for modules.";
+      };
     };
   };
 
@@ -170,12 +175,15 @@ in
 
     # Generate NixOS modules from `generators.nixosModules`
     modules.nixos =
-      lib.modules.when
-        (config.generators.nixosModules.folder != null && pathExists config.generators.nixosModules.folder)
-        (
-          mapAttrs (_name: import) (
-            lib.utils.loadDirsWithFile "default.nix" config.generators.nixosModules.folder
-          )
-        );
+      let
+        loader =
+          if config.generators.nixosModules.recursive then
+            lib.utils.loadDirsWithFileRecursive
+          else
+            lib.utils.loadDirsWithFile;
+      in
+      lib.modules.when (
+        config.generators.nixosModules.folder != null && pathExists config.generators.nixosModules.folder
+      ) (mapAttrs (_name: import) (loader "default.nix" config.generators.nixosModules.folder));
   };
 }

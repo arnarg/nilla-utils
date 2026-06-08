@@ -1,38 +1,79 @@
 { config }:
 let
-  inherit (config) lib;
   inherit (builtins)
-    readDir
-    filter
     attrNames
     concatMap
+    filter
+    foldl'
     hasAttr
     listToAttrs
+    readDir
     ;
 in
 {
   config.lib.utils = {
-    loadDirsCond =
-      f: dir:
-      let
-        contents = readDir dir;
-      in
-      listToAttrs (
-        map (n: {
-          name = n;
-          value = dir + "/${n}";
-        }) (filter (n: contents."${n}" == "directory" && f dir n) (attrNames contents))
-      );
-
     loadDirsWithFile =
       file:
-      lib.utils.loadDirsCond (
+      let
+        loadDirsCond =
+          f: dir:
+          let
+            contents = readDir dir;
+          in
+          listToAttrs (
+            map (n: {
+              name = n;
+              value = dir + "/${n}";
+            }) (filter (n: contents."${n}" == "directory" && f dir n) (attrNames contents))
+          );
+      in
+      loadDirsCond (
         d: n:
         let
           contents = readDir "${d}/${n}";
         in
         (hasAttr file contents) && (contents.${file} == "regular")
       );
+
+    loadDirsWithFileRecursive =
+      file: baseDir:
+      let
+        recurse =
+          dir:
+          let
+            contents = readDir dir;
+            subdirs = filter (n: contents.${n} == "directory") (attrNames contents);
+
+            process =
+              acc: subdir:
+              let
+                childPath = dir + "/${subdir}";
+                childResult = recurse childPath;
+                hasFile =
+                  let
+                    childContents = readDir childPath;
+                  in
+                  (hasAttr file childContents) && (childContents.${file} == "regular");
+
+                isEmpty = childResult == { };
+              in
+              if isEmpty && !hasFile then
+                acc
+              else if isEmpty && hasFile then
+                acc // { ${subdir} = childPath; }
+              else if hasFile then
+                acc
+                // {
+                  ${subdir} = childResult // {
+                    default = childPath;
+                  };
+                }
+              else
+                acc // { ${subdir} = childResult; };
+          in
+          foldl' process { } subdirs;
+      in
+      recurse baseDir;
 
     loadHostsFromDir =
       dir: file:
