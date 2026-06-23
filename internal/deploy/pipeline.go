@@ -75,10 +75,11 @@ func (s *Session) Build(ctx context.Context) (string, error) {
 	nargs := buildArgs(p)
 
 	log.Debugf("Nix build arguments: %v", nargs)
+	printSection("Building system")
 
 	cmd := nix.Command("build").Args(nargs).Executor(s.BuildExecutor())
 	if !p.Raw {
-		cmd = cmd.Reporter(tui.NewBuildReporter(p.Verbose))
+		cmd = cmd.Reporter(tui.NewBuildReporter(tui.ResolveReporterMode(p.Compact, p.Verbose)))
 	}
 
 	out, err := cmd.Run(ctx)
@@ -160,7 +161,7 @@ func (s *Session) Copy(ctx context.Context, outPath string) error {
 		Args(cp.args).
 		Executor(s.CopyExecutor())
 	if !s.Plan.Raw {
-		cmd = cmd.Reporter(tui.NewCopyReporter(s.Plan.Verbose))
+		cmd = cmd.Reporter(tui.NewCopyReporter(tui.ResolveReporterMode(s.Plan.Compact, s.Plan.Verbose)))
 	}
 	_, err := cmd.Run(ctx)
 	return err

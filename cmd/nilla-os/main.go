@@ -51,6 +51,10 @@ var app = &cli.Command{
 			},
 		},
 		&cli.BoolFlag{
+			Name:  "compact",
+			Usage: "Make build and copy progress view more compact",
+		},
+		&cli.BoolFlag{
 			Name:  "raw",
 			Usage: "Raw output from Nix",
 		},
@@ -240,6 +244,7 @@ func run(ctx context.Context, cmd *cli.Command, sc deploy.Command) error {
 		Target:      cmd.String("target"),
 		Raw:         cmd.Bool("raw"),
 		Verbose:     cmd.Bool("verbose"),
+		Compact:     cmd.Bool("compact"),
 		NoLink:      cmd.Bool("no-link"),
 		OutLink:     cmd.String("out-link"),
 		Confirm:     cmd.Bool("confirm"),

@@ -29,6 +29,7 @@ type Options struct {
 
 	Raw     bool
 	Verbose bool
+	Compact bool
 
 	NoLink  bool
 	OutLink string
@@ -48,6 +49,7 @@ type Plan struct {
 
 	Raw     bool
 	Verbose bool
+	Compact bool
 
 	NoLink  bool
 	OutLink string
@@ -110,6 +112,7 @@ func ResolvePlan(opts Options, sys System) (*Plan, error) {
 		StoreAddr:    storeAddr,
 		Raw:          opts.Raw,
 		Verbose:      opts.Verbose,
+		Compact:      opts.Compact,
 		NoLink:       opts.NoLink,
 		OutLink:      opts.OutLink,
 		Confirm:      opts.Confirm,

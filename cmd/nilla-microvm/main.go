@@ -59,6 +59,10 @@ var app = &cli.Command{
 			},
 		},
 		&cli.BoolFlag{
+			Name:  "compact",
+			Usage: "Make build and copy progress view more compact",
+		},
+		&cli.BoolFlag{
 			Name:  "raw",
 			Usage: "Raw output from Nix",
 		},
@@ -221,7 +225,9 @@ func buildActivationPackage(ctx context.Context, cmd *cli.Command, name string) 
 		Executor(builder)
 
 	if !cmd.Bool("raw") {
-		nixBuildCmd = nixBuildCmd.Reporter(tui.NewBuildReporter(cmd.Bool("verbose")))
+		nixBuildCmd = nixBuildCmd.Reporter(
+			tui.NewBuildReporter(tui.ResolveReporterMode(cmd.Bool("compact"), cmd.Bool("verbose"))),
+		)
 	}
 
 	out, err := nixBuildCmd.Run(ctx)
@@ -268,7 +274,9 @@ func buildDeclaredRunner(ctx context.Context, cmd *cli.Command, name string) (st
 		Executor(builder)
 
 	if !cmd.Bool("raw") {
-		nixBuildCmd = nixBuildCmd.Reporter(tui.NewBuildReporter(cmd.Bool("verbose")))
+		nixBuildCmd = nixBuildCmd.Reporter(
+			tui.NewBuildReporter(tui.ResolveReporterMode(cmd.Bool("compact"), cmd.Bool("verbose"))),
+		)
 	}
 
 	out, err := nixBuildCmd.Run(ctx)

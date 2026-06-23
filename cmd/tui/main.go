@@ -67,12 +67,14 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	dataFile := cmd.String("data-file")
 	maxDelay := cmd.Uint("max-delay")
 
+	rmode := tui.ResolveReporterMode(false, cmd.Bool("verbose"))
+
 	var reporter nix.ProgressReporter
 	switch rprtr {
 	case "build":
-		reporter = tui.NewBuildReporter(cmd.Bool("verbose"))
+		reporter = tui.NewBuildReporter(rmode)
 	case "copy":
-		reporter = tui.NewCopyReporter(cmd.Bool("verbose"))
+		reporter = tui.NewCopyReporter(rmode)
 	default:
 		return errors.New("--reporter needs to be either \"build\" or \"copy\"")
 	}

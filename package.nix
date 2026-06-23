@@ -3,7 +3,7 @@
   buildGoApplication,
 }:
 let
-  version = "0.0.0-alpha.23";
+  version = "0.0.0-alpha.24";
 in
 buildGoApplication {
   inherit version;
