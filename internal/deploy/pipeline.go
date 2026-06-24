@@ -6,12 +6,12 @@ import (
 	"os"
 	"strings"
 
+	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/diff"
 	"github.com/arnarg/nilla-utils/internal/exec"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/tui"
 	"github.com/arnarg/nilla-utils/internal/util"
-	"github.com/charmbracelet/log"
 )
 
 func printSection(text string) {

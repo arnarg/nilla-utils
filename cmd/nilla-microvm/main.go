@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/diff"
 	"github.com/arnarg/nilla-utils/internal/exec"
 	"github.com/arnarg/nilla-utils/internal/microvm"
@@ -17,7 +18,6 @@ import (
 	"github.com/arnarg/nilla-utils/internal/project"
 	"github.com/arnarg/nilla-utils/internal/tui"
 	"github.com/arnarg/nilla-utils/internal/util"
-	"github.com/charmbracelet/log"
 	"github.com/urfave/cli/v3"
 	"github.com/valyala/fastjson"
 )

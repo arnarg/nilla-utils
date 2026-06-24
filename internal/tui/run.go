@@ -6,8 +6,9 @@ import (
 	"sync"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/arnarg/nilla-utils/internal/nix"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 const (

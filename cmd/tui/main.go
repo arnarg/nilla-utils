@@ -8,9 +8,9 @@ import (
 	"os"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/tui"
-	"github.com/charmbracelet/log"
 	"github.com/urfave/cli/v3"
 )
 

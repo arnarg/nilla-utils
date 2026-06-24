@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 
+	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/askpass"
 	"github.com/arnarg/nilla-utils/internal/deploy"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/project"
 	"github.com/arnarg/nilla-utils/internal/util"
-	"github.com/charmbracelet/log"
 	"github.com/urfave/cli/v3"
 )
 

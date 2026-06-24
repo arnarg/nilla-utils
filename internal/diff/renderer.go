@@ -2,15 +2,16 @@ package diff
 
 import (
 	"fmt"
+	"image/color"
 	"io"
 	"strconv"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/arnarg/nilla-utils/internal/util"
-	"github.com/charmbracelet/lipgloss"
 )
 
-const (
+var (
 	colorMuted   = lipgloss.Color("8")
 	colorPrefix  = lipgloss.Color("3")
 	colorRemoved = lipgloss.Color("1")
@@ -118,7 +119,7 @@ func (t *terminalRenderer) renderStats(w io.Writer, r Report) {
 		r.NumBefore, r.NumAfter, prefix, diffVal, unit)
 }
 
-func (t *terminalRenderer) formatVersions(vers []Version, highlight int, color lipgloss.Color) string {
+func (t *terminalRenderer) formatVersions(vers []Version, highlight int, clr color.Color) string {
 	if len(vers) == 0 {
 		return lipgloss.NewStyle().Foreground(colorMuted).Render("<none>")
 	}
@@ -131,10 +132,10 @@ func (t *terminalRenderer) formatVersions(vers []Version, highlight int, color l
 		}
 		if highlight > 0 && highlight < len(s) {
 			pre := lipgloss.NewStyle().Foreground(colorPrefix).Render(s[:highlight])
-			suf := lipgloss.NewStyle().Foreground(color).Render(s[highlight:])
+			suf := lipgloss.NewStyle().Foreground(clr).Render(s[highlight:])
 			parts[i] = pre + suf
 		} else {
-			parts[i] = lipgloss.NewStyle().Foreground(color).Render(s)
+			parts[i] = lipgloss.NewStyle().Foreground(clr).Render(s)
 		}
 	}
 	return strings.Join(parts, ", ")

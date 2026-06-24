@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/arnarg/nilla-utils/internal/generation"
 	"github.com/arnarg/nilla-utils/internal/tui"
 	"github.com/arnarg/nilla-utils/internal/util"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/urfave/cli/v3"
 )
 

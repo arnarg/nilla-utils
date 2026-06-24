@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
+	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/util"
-	"github.com/charmbracelet/log"
 )
 
 // ProjectSource is a project that has been resolved and added to the nix store.

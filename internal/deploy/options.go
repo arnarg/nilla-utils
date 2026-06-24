@@ -3,10 +3,10 @@ package deploy
 import (
 	"fmt"
 
+	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/project"
 	"github.com/arnarg/nilla-utils/internal/util"
-	"github.com/charmbracelet/log"
 )
 
 type Command int

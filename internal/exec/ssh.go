@@ -11,9 +11,9 @@ import (
 	"strings"
 	"sync"
 
+	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/askpass"
 	"github.com/arnarg/nilla-utils/internal/util"
-	"github.com/charmbracelet/log"
 	"github.com/kevinburke/ssh_config"
 	"github.com/muesli/cancelreader"
 	"github.com/skeema/knownhosts"

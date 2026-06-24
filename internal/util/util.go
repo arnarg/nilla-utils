@@ -2,6 +2,7 @@ package util
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"os/exec"
 	"os/user"
@@ -10,8 +11,8 @@ import (
 	"syscall"
 	"unicode"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/log"
+	"charm.land/lipgloss/v2"
+	"charm.land/log/v2"
 )
 
 const (
@@ -169,12 +170,12 @@ func IsSSHDebugEnabled() bool {
 	return verbosityLevel >= 2
 }
 
-func levelStyle(level log.Level, color lipgloss.TerminalColor) lipgloss.Style {
+func levelStyle(level log.Level, clr color.Color) lipgloss.Style {
 	return lipgloss.NewStyle().
 		SetString(strings.ToUpper(level.String())).
 		Bold(true).
 		MaxWidth(4).
-		Foreground(color)
+		Foreground(clr)
 }
 
 // ParseTarget parses a target string in the format "user@host" or "host" and returns

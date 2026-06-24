@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/exec"
-	"github.com/charmbracelet/log"
 	"github.com/sourcegraph/conc/pool"
 )
 

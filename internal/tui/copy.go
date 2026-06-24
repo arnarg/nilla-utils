@@ -8,10 +8,11 @@ import (
 	"slices"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/util"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type CopyReporter struct {
@@ -193,17 +194,17 @@ func (m copyModel) handleMessageEvent(ev nix.MessageEvent) (tea.Model, tea.Cmd) 
 	return m, nil
 }
 
-func (m copyModel) View() string {
+func (m copyModel) View() tea.View {
 	if m.err != nil {
-		return m.errorView("Copying failed! Exiting...")
+		return tea.NewView(m.errorView("Copying failed! Exiting..."))
 	}
 	if m.done {
-		return m.summaryView()
+		return tea.NewView(m.summaryView())
 	}
 	if !m.initialized {
-		return m.uninitializedView()
+		return tea.NewView(m.uninitializedView())
 	}
-	return m.progressView()
+	return tea.NewView(m.progressView())
 }
 
 func (m copyModel) progressView() string {
