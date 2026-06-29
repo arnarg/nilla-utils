@@ -2,221 +2,231 @@ package generation
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/arnarg/nilla-utils/internal/exec"
 	"github.com/arnarg/nilla-utils/internal/util"
 )
 
+var (
+	homeGenIDRe   = regexp.MustCompile(`^home-manager-(\d+)-link$`)
+	homeGenListRe = regexp.MustCompile(`^home-manager-\d+-link$`)
+)
 
-// localHomeProfileDirs returns the list of profile directories to check for local operations.
-func localHomeProfileDirs() []string {
-	var dirs []string
-	if user := util.GetUser(); user != "" {
-		dirs = append(dirs, fmt.Sprintf("/nix/var/nix/profiles/per-user/%s", user))
-	}
-	if home := util.GetHomeDir(); home != "" {
-		dirs = append(dirs, fmt.Sprintf("%s/.local/state/nix/profiles", home))
-	}
-	return dirs
+// fsProbe is the read-only subset of exec.Executor / exec.Host needed to locate
+// the current Home Manager generation. Both exec.Executor and exec.Host satisfy
+// it, so the deploy path (which holds an exec.Executor) and the Host-based
+// generation commands share the same discovery logic.
+type fsProbe interface {
+	Command(string, ...string) (exec.Command, error)
+	PathExists(string) (bool, error)
+	IsLocal() bool
 }
 
-// homeProfileDirsFor returns the list of profile directories to check for executor-aware operations.
-func homeProfileDirsFor(user string, homeResolver homeDirResolver) ([]string, error) {
-	var dirs []string
-	if user != "" {
-		dirs = append(dirs, fmt.Sprintf("/nix/var/nix/profiles/per-user/%s", user))
-	}
-	homeDir, err := homeResolver.getHomeDir(user)
-	if err == nil && homeDir != "" {
-		dirs = append(dirs, fmt.Sprintf("%s/.local/state/nix/profiles", homeDir))
-	}
-	return dirs, nil
+// HomeSystem implements System for Home Manager generations.
+type HomeSystem struct{}
+
+func (HomeSystem) RequiresLocalRoot() bool { return false }
+
+func (HomeSystem) Headers() []string {
+	return []string{"Generation", "Build date", "Home Manager version"}
 }
 
-// findCurrentHomeGenerationPath is the shared helper that finds the current Home Manager generation path.
-// It checks both /nix/var/nix/profiles/per-user/<user> and ~/.local/state/nix/profiles locations.
-func findCurrentHomeGenerationPath(user string, homeResolver homeDirResolver, linkReader linkReader) (string, error) {
-	dirs, err := homeProfileDirsFor(user, homeResolver)
+func (HomeSystem) Row(g Generation) []string {
+	return []string{
+		strconv.Itoa(g.ID),
+		g.BuildDate.Format(time.DateTime),
+		g.Version,
+	}
+}
+
+func (HomeSystem) Current(h exec.Host) (Generation, error) {
+	path, ok := currentHomeLinkPath(h, "")
+	if !ok {
+		return Generation{}, errors.New("current generation not found")
+	}
+	ei, err := h.Lstat(path)
 	if err != nil {
-		return "", err
+		return Generation{}, err
 	}
+	return buildHomeGeneration(h, filepath.Dir(path), ei)
+}
 
-	for _, dir := range dirs {
-		homeManagerLink := fmt.Sprintf("%s/home-manager", dir)
-		exists, err := linkReader.pathExists(homeManagerLink)
+func (HomeSystem) List(h exec.Host) ([]Generation, error) {
+	for _, dir := range homeProfileDirs(h) {
+		gens, err := listHomeGenerations(h, dir)
 		if err != nil {
-			continue
-		}
-		if exists {
-			linkName, err := linkReader.readLink(homeManagerLink)
-			if err == nil {
-				return fmt.Sprintf("%s/%s", dir, linkName), nil
+			if errors.Is(err, os.ErrNotExist) {
+				continue
 			}
-		}
-	}
-
-	return "", errors.New("current generation not found")
-}
-
-// CurrentHomeGeneration returns the current Home Manager generation using local filesystem operations.
-func CurrentHomeGeneration() (*HomeGeneration, error) {
-	user := util.GetUser()
-	homeResolver := &localHomeDirResolver{}
-	linkReader := &localLinkReader{}
-
-	path, err := findCurrentHomeGenerationPath(user, homeResolver, linkReader)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert path to HomeGeneration struct
-	return pathToHomeGeneration(path)
-}
-
-// CurrentHomeGenerationPath queries the current Home Manager generation path using the given executor.
-// If username is provided, it will be used to query the remote home directory.
-// It returns the path and true if found, or empty string and false if not found.
-func CurrentHomeGenerationPath(e exec.Executor, username string) (string, bool) {
-	user := username
-	if user == "" {
-		user = util.GetUser()
-	}
-
-	var homeResolver homeDirResolver
-	var linkReader linkReader
-
-	if e.IsLocal() {
-		homeResolver = &localHomeDirResolver{}
-		linkReader = &localLinkReader{}
-	} else {
-		homeResolver = &remoteHomeDirResolver{executor: e}
-		linkReader = &remoteLinkReader{executor: e}
-	}
-
-	path, err := findCurrentHomeGenerationPath(user, homeResolver, linkReader)
-	if err != nil {
-		return "", false
-	}
-
-	return path, true
-}
-
-// pathToHomeGeneration converts a generation path string to a HomeGeneration struct.
-// This is used for local operations where we need the full struct with metadata.
-func pathToHomeGeneration(path string) (*HomeGeneration, error) {
-	// Extract directory from path
-	dir := filepath.Dir(path)
-
-	// Get file info
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewHomeGeneration(dir, info)
-}
-
-type HomeGeneration struct {
-	ID        int
-	BuildDate time.Time
-	Version   string
-
-	path string
-}
-
-func NewHomeGeneration(root string, info fs.FileInfo) (*HomeGeneration, error) {
-	// Get ID from name
-	strID := regexp.MustCompile(`^home-manager-(\d+)-link$`).FindStringSubmatch(info.Name())
-	if strID[1] == "" {
-		return nil, fmt.Errorf("generation path '%s' does not match pattern", info.Name())
-	}
-	id, err := strconv.Atoi(strID[1])
-	if err != nil {
-		return nil, err
-	}
-
-	// Build full path
-	path := fmt.Sprintf("%s/%s", root, info.Name())
-
-	// Read home-manager version
-	homeVer, err := os.ReadFile(fmt.Sprintf("%s/hm-version", path))
-	if err != nil {
-		return nil, err
-	}
-
-	return &HomeGeneration{
-		ID:        id,
-		BuildDate: info.ModTime(),
-		Version:   string(bytes.TrimSpace(homeVer)),
-		path:      path,
-	}, nil
-}
-
-func (g *HomeGeneration) Delete() error {
-	if err := os.Remove(g.path); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func (g *HomeGeneration) Path() string {
-	return g.path
-}
-
-func ListHomeGenerations() ([]*HomeGeneration, error) {
-	dirs := localHomeProfileDirs()
-	for _, dir := range dirs {
-		gens, err := listHomeGenerations(dir)
-		if err != nil {
 			return nil, err
 		}
 		if len(gens) > 0 {
 			return gens, nil
 		}
 	}
-
-	return []*HomeGeneration{}, nil
+	return []Generation{}, nil
 }
 
-func listHomeGenerations(dir string) ([]*HomeGeneration, error) {
-	// List files in dir
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []*HomeGeneration{}, nil
+func (HomeSystem) DeleteGenerations(h exec.Host, gens []Generation) error {
+	for _, g := range gens {
+		if err := h.Remove(g.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
+	}
+	return nil
+}
+
+func (HomeSystem) CollectGarbage(ctx context.Context, h exec.Host) error {
+	// Home generations are user-owned; no elevation is required locally or
+	// remotely. The gc runs against the host's own store.
+	return runGC(ctx, h, "nix", "store", "gc", "-v")
+}
+
+func buildHomeGeneration(h exec.Host, dir string, e exec.EntryInfo) (Generation, error) {
+	m := homeGenIDRe.FindStringSubmatch(e.Name)
+	if m == nil {
+		return Generation{}, fmt.Errorf("generation path '%s' does not match pattern", e.Name)
+	}
+	id, err := strconv.Atoi(m[1])
+	if err != nil {
+		return Generation{}, err
+	}
+
+	path := filepath.Join(dir, e.Name)
+
+	verBytes, err := h.ReadFile(filepath.Join(path, "hm-version"))
+	if err != nil {
+		return Generation{}, err
+	}
+
+	return Generation{
+		ID:        id,
+		BuildDate: e.ModTime,
+		Version:   strings.TrimSpace(string(verBytes)),
+		path:      path,
+	}, nil
+}
+
+func listHomeGenerations(h exec.Host, dir string) ([]Generation, error) {
+	entries, err := h.ReadDir(dir)
+	if err != nil {
 		return nil, err
 	}
 
-	// Iterate over entries and build list of generations
-	generations := []*HomeGeneration{}
-	regex := regexp.MustCompile(`^home-manager-\d+-link$`)
+	var gens []Generation
 	for _, e := range entries {
-		if e.Type()&fs.ModeSymlink != 0 && regex.MatchString(e.Name()) {
-			info, err := e.Info()
-			if err != nil {
-				return nil, err
-			}
+		if !e.IsSymlink || !homeGenListRe.MatchString(e.Name) {
+			continue
+		}
+		g, err := buildHomeGeneration(h, dir, e)
+		if err != nil {
+			return nil, err
+		}
+		gens = append(gens, g)
+	}
+	return gens, nil
+}
 
-			generation, err := NewHomeGeneration(dir, info)
-			if err != nil {
-				return nil, err
-			}
+// currentHomeLinkPath finds the current home-manager generation path. A non-empty
+// userHint (e.g. parsed from a system name) takes precedence over discovery.
+func currentHomeLinkPath(p fsProbe, userHint string) (string, bool) {
+	user, home := homeUserAndDir(p, userHint)
+	for _, dir := range homeDirs(user, home) {
+		link := filepath.Join(dir, "home-manager")
+		exists, err := p.PathExists(link)
+		if err != nil || !exists {
+			continue
+		}
+		out, err := runOutput(p, "readlink", link)
+		if err != nil {
+			continue
+		}
+		target := strings.TrimSpace(out)
+		if target == "" {
+			continue
+		}
+		return filepath.Join(dir, target), true
+	}
+	return "", false
+}
 
-			generations = append(generations, generation)
+// homeProfileDirs returns the candidate profile directories for the host backing
+// p, discovering the remote user when necessary.
+func homeProfileDirs(p fsProbe) []string {
+	user, home := homeUserAndDir(p, "")
+	return homeDirs(user, home)
+}
+
+func homeUserAndDir(p fsProbe, userHint string) (user, home string) {
+	switch {
+	case userHint != "":
+		user = userHint
+	case p.IsLocal():
+		user = util.GetUser()
+	default:
+		if u, err := runOutput(p, "id", "-un"); err == nil {
+			user = strings.TrimSpace(u)
 		}
 	}
+	if p.IsLocal() {
+		home = util.GetHomeDir()
+	} else {
+		home = remoteHomeDir(p, user)
+	}
+	return user, home
+}
 
-	return generations, nil
+func homeDirs(user, home string) []string {
+	var dirs []string
+	if user != "" {
+		dirs = append(dirs, fmt.Sprintf("/nix/var/nix/profiles/per-user/%s", user))
+	}
+	if home != "" {
+		dirs = append(dirs, filepath.Join(home, ".local", "state", "nix", "profiles"))
+	}
+	return dirs
+}
+
+// remoteHomeDir resolves a remote user's home directory via getent (Linux) with a
+// printenv HOME fallback (macOS and Linux).
+func remoteHomeDir(p fsProbe, user string) string {
+	if out, err := runOutput(p, "getent", "passwd", user); err == nil {
+		if fields := strings.Split(strings.TrimSpace(out), ":"); len(fields) >= 6 && fields[5] != "" {
+			return fields[5]
+		}
+	}
+	if out, err := runOutput(p, "printenv", "HOME"); err == nil {
+		return strings.TrimSpace(out)
+	}
+	return ""
+}
+
+func runOutput(p fsProbe, name string, args ...string) (string, error) {
+	cmd, err := p.Command(name, args...)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	cmd.SetStdout(&buf)
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// CurrentHomeGenerationPath locates the current Home Manager generation path for
+// the given executor. When username is empty the local user (or, for remote
+// executors, the discovered remote user) is used. It is retained for the deploy
+// path, which operates on an exec.Executor rather than a full exec.Host.
+func CurrentHomeGenerationPath(e exec.Executor, username string) (string, bool) {
+	return currentHomeLinkPath(e, username)
 }

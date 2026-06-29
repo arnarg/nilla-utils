@@ -1,154 +1,170 @@
 package generation
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/arnarg/nilla-utils/internal/exec"
 )
 
-const PROFILES_DIR = "/nix/var/nix/profiles"
+const nixosProfilesDir = "/nix/var/nix/profiles"
 
-func CurrentNixOSGeneration() (*NixOSGeneration, error) {
-	p := fmt.Sprintf("%s/system", PROFILES_DIR)
+var (
+	nixosCurrentLink = nixosProfilesDir + "/system"
+	nixosGenIDRe     = regexp.MustCompile(`^system-(\d+)-link$`)
+	nixosGenListRe   = regexp.MustCompile(`^system-\d+-link$`)
+	kernelVersionRe  = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+)
 
-	// Check if it system link exists
-	info, err := os.Stat(p)
-	if err != nil {
-		return nil, err
-	}
-	if info.Mode()&fs.ModeSymlink != 0 {
-		return nil, errors.New("main system profile not symlink")
-	}
+// NixOSSystem implements System for NixOS generations stored under
+// /nix/var/nix/profiles.
+type NixOSSystem struct{}
 
-	// Resolve link
-	res, err := os.Readlink(p)
-	if err != nil {
-		return nil, err
-	}
+func (NixOSSystem) RequiresLocalRoot() bool { return true }
 
-	// Get file info on resolved link
-	absp, err := filepath.Abs(fmt.Sprintf("%s/%s", PROFILES_DIR, res))
-	if err != nil {
-		return nil, err
-	}
-
-	linfo, err := os.Stat(absp)
-	if err != nil {
-		return nil, err
-	}
-	if linfo.Mode()&fs.ModeSymlink != 0 {
-		return nil, errors.New("resolved system profile not symlink")
-	}
-
-	return NewNixOSGeneration(filepath.Dir(absp), linfo)
+func (NixOSSystem) Headers() []string {
+	return []string{"Generation", "Build date", "NixOS version", "Kernel version"}
 }
 
-type NixOSGeneration struct {
-	ID            int
-	BuildDate     time.Time
-	Version       string
-	KernelVersion string
-
-	path string
+func (NixOSSystem) Row(g Generation) []string {
+	return []string{
+		strconv.Itoa(g.ID),
+		g.BuildDate.Format(time.DateTime),
+		g.Version,
+		g.KernelVersion,
+	}
 }
 
-func NewNixOSGeneration(root string, info fs.FileInfo) (*NixOSGeneration, error) {
-	// Get ID from name
-	strID := regexp.MustCompile(`^system-(\d+)-link$`).FindStringSubmatch(info.Name())
-	if strID[1] == "" {
-		return nil, fmt.Errorf("generation path '%s' does not match pattern", info.Name())
-	}
-	id, err := strconv.Atoi(strID[1])
+func (NixOSSystem) Current(h exec.Host) (Generation, error) {
+	// The main system profile (/nix/var/nix/profiles/system) is a symlink to
+	// the current generation link (e.g. system-5-link).
+	res, err := h.Readlink(nixosCurrentLink)
 	if err != nil {
-		return nil, err
+		return Generation{}, err
 	}
-
-	// Build full path
-	path := fmt.Sprintf("%s/%s", root, info.Name())
-
-	// Read NixOS version
-	nixosVer, err := os.ReadFile(fmt.Sprintf("%s/nixos-version", path))
+	absp := filepath.Join(nixosProfilesDir, res)
+	ei, err := h.Lstat(absp)
 	if err != nil {
-		return nil, err
+		return Generation{}, err
 	}
-
-	// Get kernel version
-	kernelVer, err := getKernelVersion(path)
-	if err != nil {
-		return nil, err
-	}
-
-	return &NixOSGeneration{
-		ID:            id,
-		BuildDate:     info.ModTime(),
-		Version:       string(nixosVer),
-		KernelVersion: kernelVer,
-		path:          path,
-	}, nil
+	return buildNixOSGeneration(h, nixosProfilesDir, ei)
 }
 
-func (g *NixOSGeneration) Delete() error {
-	if err := os.Remove(g.path); err != nil {
-		if os.IsNotExist(err) {
-			return nil
+func (NixOSSystem) List(h exec.Host) ([]Generation, error) {
+	entries, err := h.ReadDir(nixosProfilesDir)
+	if err != nil {
+		return nil, err
+	}
+
+	var gens []Generation
+	for _, e := range entries {
+		if !e.IsSymlink || !nixosGenListRe.MatchString(e.Name) {
+			continue
 		}
-		return err
+		g, err := buildNixOSGeneration(h, nixosProfilesDir, e)
+		if err != nil {
+			return nil, err
+		}
+		gens = append(gens, g)
+	}
+	return gens, nil
+}
+
+func (NixOSSystem) DeleteGenerations(h exec.Host, gens []Generation) error {
+	if len(gens) == 0 {
+		return nil
+	}
+	// Remote NixOS profile links are root-owned: batch into a single privileged
+	// removal to avoid one password prompt per link. Local cleanup runs after
+	// SelfElevate, so the process is already root.
+	if !h.IsLocal() {
+		args := []string{"rm"}
+		for _, g := range gens {
+			args = append(args, g.path)
+		}
+		c, err := h.Command("sudo", args...)
+		if err != nil {
+			return err
+		}
+		c.SetStdin(os.Stdin)
+		c.SetStderr(os.Stderr)
+		c.SetStdout(os.Stdout)
+		return c.Run()
+	}
+	for _, g := range gens {
+		if err := h.Remove(g.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	return nil
 }
 
-func (g *NixOSGeneration) Path() string {
-	return g.path
+func (NixOSSystem) CollectGarbage(ctx context.Context, h exec.Host) error {
+	// Local cleanup already elevated to root; remote gc must run under sudo.
+	if h.IsLocal() {
+		return runGC(ctx, h, "nix", "store", "gc", "-v")
+	}
+	return runGC(ctx, h, "sudo", "nix", "store", "gc", "-v")
 }
 
-func getKernelVersion(system string) (string, error) {
-	// List directories in <system>/kernel-modules/lib/modules
-	entries, err := os.ReadDir(fmt.Sprintf("%s/kernel-modules/lib/modules", system))
+func buildNixOSGeneration(h exec.Host, root string, e exec.EntryInfo) (Generation, error) {
+	m := nixosGenIDRe.FindStringSubmatch(e.Name)
+	if m == nil {
+		return Generation{}, fmt.Errorf("generation path '%s' does not match pattern", e.Name)
+	}
+	id, err := strconv.Atoi(m[1])
+	if err != nil {
+		return Generation{}, err
+	}
+
+	path := filepath.Join(root, e.Name)
+
+	verBytes, err := h.ReadFile(filepath.Join(path, "nixos-version"))
+	if err != nil {
+		return Generation{}, err
+	}
+
+	kernel, err := readKernelVersion(h, path)
+	if err != nil {
+		return Generation{}, err
+	}
+
+	return Generation{
+		ID:            id,
+		BuildDate:     e.ModTime,
+		Version:       strings.TrimSpace(string(verBytes)),
+		KernelVersion: kernel,
+		path:          path,
+	}, nil
+}
+
+func readKernelVersion(h exec.Host, system string) (string, error) {
+	entries, err := h.ReadDir(filepath.Join(system, "kernel-modules", "lib", "modules"))
 	if err != nil {
 		return "", err
 	}
-
-	// Find the first sub-folder matching semver
 	for _, e := range entries {
-		if regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(e.Name()) {
-			return strings.TrimSuffix(e.Name(), "/"), nil
+		if kernelVersionRe.MatchString(e.Name) {
+			return e.Name, nil
 		}
 	}
-
 	return "Unknown", nil
 }
 
-func ListNixOSGenerations() ([]*NixOSGeneration, error) {
-	// List files in root
-	entries, err := os.ReadDir(PROFILES_DIR)
+func runGC(ctx context.Context, h exec.Host, name string, args ...string) error {
+	c, err := h.CommandContext(ctx, name, args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	// Iterate over entries and build list of generations
-	generations := []*NixOSGeneration{}
-	regex := regexp.MustCompile(`^system-\d+-link$`)
-	for _, e := range entries {
-		if e.Type()&fs.ModeSymlink != 0 && regex.MatchString(e.Name()) {
-			info, err := e.Info()
-			if err != nil {
-				return nil, err
-			}
-
-			generation, err := NewNixOSGeneration(PROFILES_DIR, info)
-			if err != nil {
-				return nil, err
-			}
-
-			generations = append(generations, generation)
-		}
-	}
-
-	return generations, nil
+	c.SetStdin(os.Stdin)
+	c.SetStderr(os.Stderr)
+	c.SetStdout(os.Stderr)
+	return c.Run()
 }

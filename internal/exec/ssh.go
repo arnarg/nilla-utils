@@ -31,7 +31,7 @@ type sshExecutor struct {
 	client *ssh.Client
 }
 
-func NewSSHExecutor(target string, cache *askpass.PasswordCache) (Executor, error) {
+func dialSSH(target string, cache *askpass.PasswordCache) (*ssh.Client, error) {
 	// Get config from target
 	host, conf, err := configFromTarget(target, cache)
 	if err != nil {
@@ -56,6 +56,14 @@ func NewSSHExecutor(target string, cache *askpass.PasswordCache) (Executor, erro
 		log.Debugf("Successfully connected to %s@%s", conf.User, host)
 	}
 
+	return client, nil
+}
+
+func NewSSHExecutor(target string, cache *askpass.PasswordCache) (Executor, error) {
+	client, err := dialSSH(target, cache)
+	if err != nil {
+		return nil, err
+	}
 	return &sshExecutor{client}, nil
 }
 
@@ -193,10 +201,7 @@ func (c *sshCommand) Wait() error {
 
 	lctx, cancel := context.WithCancel(context.Background())
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		select {
 		// Global context cancelled
 		case <-c.ctx.Done():
@@ -208,7 +213,7 @@ func (c *sshCommand) Wait() error {
 		// Local context cancelled
 		case <-lctx.Done():
 		}
-	}()
+	})
 
 	// Wait for session command
 	err := c.sess.Wait()

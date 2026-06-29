@@ -32,18 +32,11 @@ func (HomeSystem) AttrPath(name string) string {
 
 func (HomeSystem) CurrentGeneration(executor exec.Executor, name string) (*Generation, error) {
 	username := extractUsername(name)
-	if executor.IsLocal() {
-		current, err := generation.CurrentHomeGeneration()
-		if err != nil {
-			return nil, err
-		}
-		return &Generation{
-			Path:    current.Path(),
-			Querier: diff.NewExecutorQuerier(executor),
-		}, nil
-	}
 	path, found := generation.CurrentHomeGenerationPath(executor, username)
 	if !found {
+		if executor.IsLocal() {
+			return nil, fmt.Errorf("current Home Manager generation not found")
+		}
 		return nil, fmt.Errorf("current Home Manager generation not found on target for user %s", username)
 	}
 	return &Generation{
