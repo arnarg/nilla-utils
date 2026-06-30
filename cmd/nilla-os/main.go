@@ -51,12 +51,18 @@ var app = &cli.Command{
 			},
 		},
 		&cli.BoolFlag{
-			Name:  "compact",
-			Usage: "Make build and copy progress view more compact",
+			Name:    "compact",
+			Usage:   "Make build and copy progress view more compact",
+			Sources: cli.EnvVars("NILLA_UTILS_TUI_COMPACT"),
 		},
 		&cli.BoolFlag{
 			Name:  "raw",
 			Usage: "Raw output from Nix",
+		},
+		&cli.BoolFlag{
+			Name:    "notify",
+			Usage:   "Send a desktop notification when a build is ready for confirmation",
+			Sources: cli.EnvVars("NILLA_UTILS_NOTIFY_CONFIRM"),
 		},
 		&cli.StringFlag{
 			Name:    "project",
@@ -248,6 +254,7 @@ func run(ctx context.Context, cmd *cli.Command, sc deploy.Command) error {
 		NoLink:      cmd.Bool("no-link"),
 		OutLink:     cmd.String("out-link"),
 		Confirm:     cmd.Bool("confirm"),
+		Notify:      cmd.Bool("notify"),
 	}, deploy.NixOSSystem{})
 	if err != nil {
 		return err

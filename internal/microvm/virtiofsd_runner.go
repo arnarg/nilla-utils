@@ -44,11 +44,11 @@ type virtiofsdRunner struct {
 	logPath          string
 	readyTimeout     time.Duration
 
-	cmd        *exec.Cmd
-	logFile    *os.File
-	logWriter  *io.PipeWriter
-	logReader  *io.PipeReader
-	readyChan  chan error
+	cmd         *exec.Cmd
+	logFile     *os.File
+	logWriter   *io.PipeWriter
+	logReader   *io.PipeReader
+	readyChan   chan error
 	runningChan chan string
 }
 

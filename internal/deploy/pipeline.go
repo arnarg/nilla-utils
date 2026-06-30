@@ -12,6 +12,7 @@ import (
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/tui"
 	"github.com/arnarg/nilla-utils/internal/util"
+	"github.com/gen2brain/beeep"
 )
 
 func printSection(text string) {
@@ -145,6 +146,7 @@ func Confirm(skip bool) (bool, error) {
 	if skip {
 		return true, nil
 	}
+
 	return tui.RunConfirm("Do you want to continue?")
 }
 
@@ -183,6 +185,11 @@ func (s *Session) Run(ctx context.Context) error {
 
 	if s.Plan.SubCmd == Build {
 		return nil
+	}
+
+	if s.Plan.Notify && !s.Plan.Confirm {
+		beeep.AppName = "nilla-utils"
+		_ = beeep.Notify("nilla-utils", fmt.Sprintf("%s '%s' ready, awaiting confirmation", s.Plan.SubCmd, s.Plan.Name), "")
 	}
 
 	ok, err := Confirm(s.Plan.Confirm)

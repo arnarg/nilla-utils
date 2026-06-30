@@ -143,9 +143,9 @@ func TestDecodeClosureSize(t *testing.T) {
 			want: 0,
 		},
 		{
-			name: "invalid json",
-			in:   []byte(`not json`),
-			want: 0,
+			name:    "invalid json",
+			in:      []byte(`not json`),
+			want:    0,
 			wantErr: true,
 		},
 	}

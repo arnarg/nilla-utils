@@ -13,6 +13,9 @@ schema = 3
   [mod."charm.land/log/v2"]
     version = "v2.0.0"
     hash = "sha256-UpdpM11MkNx20lXC46vtMp7PZ0H0GXvX7ZN9STo5qHE="
+  [mod."git.sr.ht/~jackmordaunt/go-toast"]
+    version = "v1.1.2"
+    hash = "sha256-xNlul602ezXiEiRP67VEECk2a4kW1n9aHWqa+8UKT4k="
   [mod."github.com/charmbracelet/colorprofile"]
     version = "v0.4.3"
     hash = "sha256-y+QDUxGOKhugEMQLRUTZYT2C+wKqYHnMLJ44jbh7+JA="
@@ -37,12 +40,27 @@ schema = 3
   [mod."github.com/clipperhouse/uax29/v2"]
     version = "v2.7.0"
     hash = "sha256-GO3az7WiGcwU0OvmocwdfR5ohGRL8NbjscIaMyhAdxE="
+  [mod."github.com/esiqveland/notify"]
+    version = "v0.13.3"
+    hash = "sha256-y+WqZAtCEZacAaqxdEEE+8gh2xhiPMpwM7IUmpE6og0="
+  [mod."github.com/gen2brain/beeep"]
+    version = "v0.11.2"
+    hash = "sha256-vP7oVTIHLx6LIUH7lpQjYyeOOJb6DeRkGykHkv7Vbks="
   [mod."github.com/go-logfmt/logfmt"]
     version = "v0.6.0"
     hash = "sha256-RtIG2qARd5sT10WQ7F3LR8YJhS8exs+KiuUiVf75bWg="
+  [mod."github.com/go-ole/go-ole"]
+    version = "v1.3.0"
+    hash = "sha256-tF8t3VcV71jQ4jbPL91BwR59AKDpUAFV1waIKzkXJu8="
   [mod."github.com/go-test/deep"]
     version = "v1.1.1"
     hash = "sha256-WvPrTvUPmbQb4R6DrvSB9O3zm0IOk+n14YpnSl2deR8="
+  [mod."github.com/godbus/dbus/v5"]
+    version = "v5.1.0"
+    hash = "sha256-xOCMJpQK3KTmHTPn/CdqI4j0eENCtMmJDgAIoYqYOEY="
+  [mod."github.com/jackmordaunt/icns/v3"]
+    version = "v3.0.1"
+    hash = "sha256-BBS5+lIOPn3HVBr4S15YYgvffQxy24BAOAQml4CJ2s4="
   [mod."github.com/kevinburke/ssh_config"]
     version = "v1.2.0"
     hash = "sha256-Ta7ZOmyX8gG5tzWbY2oES70EJPfI90U7CIJS9EAce0s="
@@ -55,15 +73,27 @@ schema = 3
   [mod."github.com/muesli/cancelreader"]
     version = "v0.2.2"
     hash = "sha256-uEPpzwRJBJsQWBw6M71FDfgJuR7n55d/7IV8MO+rpwQ="
+  [mod."github.com/nfnt/resize"]
+    version = "v0.0.0-20180221191011-83c6a9932646"
+    hash = "sha256-yvPV+HlDOyJsiwAcVHQkmtw8DHSXyw+cXHkigXm8rAA="
   [mod."github.com/rivo/uniseg"]
     version = "v0.4.7"
     hash = "sha256-rDcdNYH6ZD8KouyyiZCUEy8JrjOQoAkxHBhugrfHjFo="
+  [mod."github.com/sergeymakinen/go-bmp"]
+    version = "v1.0.0"
+    hash = "sha256-8ADMMD2M+h264VGwMxBcIBfpou/2zysdo+xtWXHf9C0="
+  [mod."github.com/sergeymakinen/go-ico"]
+    version = "v1.0.0-beta.0"
+    hash = "sha256-ljOz3cREtFSoqdVtfPo2tgk25QA90Bfn/iHJYKF9roQ="
   [mod."github.com/skeema/knownhosts"]
     version = "v1.3.1"
     hash = "sha256-kjqQDzuncQNTuOYegqVZExwuOt/Z73m2ST7NZFEKixI="
   [mod."github.com/sourcegraph/conc"]
     version = "v0.3.0"
     hash = "sha256-mIdMs9MLAOBKf3/0quf1iI3v8uNWydy7ae5MFa+F2Ko="
+  [mod."github.com/tadvi/systray"]
+    version = "v0.0.0-20190226123456-11a2b8fa57af"
+    hash = "sha256-o0Z+nrd8l5A/CjJAW7lq5cpjdbaihfqiu5laLnSjJS8="
   [mod."github.com/urfave/cli/v3"]
     version = "v3.1.1"
     hash = "sha256-Rkljw402yWNxHBvQL1g6kNHNU9V0PA4olnoaOC31LlE="

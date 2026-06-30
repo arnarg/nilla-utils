@@ -18,6 +18,21 @@ const (
 	Switch
 )
 
+func (c Command) String() string {
+	switch c {
+	case Build:
+		return "Build"
+	case Test:
+		return "Test"
+	case Boot:
+		return "Boot"
+	case Switch:
+		return "Switch"
+	default:
+		return "Unknown"
+	}
+}
+
 type Options struct {
 	ProjectPath string
 	Name        string
@@ -35,6 +50,7 @@ type Options struct {
 	OutLink string
 
 	Confirm bool
+	Notify  bool
 }
 
 type Plan struct {
@@ -55,6 +71,7 @@ type Plan struct {
 	OutLink string
 
 	Confirm bool
+	Notify  bool
 }
 
 func ResolvePlan(opts Options, sys System) (*Plan, error) {
@@ -116,5 +133,6 @@ func ResolvePlan(opts Options, sys System) (*Plan, error) {
 		NoLink:       opts.NoLink,
 		OutLink:      opts.OutLink,
 		Confirm:      opts.Confirm,
+		Notify:       opts.Notify,
 	}, nil
 }
