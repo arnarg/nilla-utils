@@ -16,5 +16,23 @@ func listGenerations(ctx context.Context, cmd *cli.Command) error {
 
 func cleanGenerations(ctx context.Context, cmd *cli.Command) error {
 	util.InitLogger(verboseCount)
-	return gencmd.Clean(ctx, generation.HomeSystem{}, cmd.String("target"), uint(cmd.Uint("keep")), cmd.Bool("confirm"))
+
+	var from, to *int
+	if cmd.IsSet("from") {
+		v := int(cmd.Int("from"))
+		from = &v
+	}
+	if cmd.IsSet("to") {
+		v := int(cmd.Int("to"))
+		to = &v
+	}
+
+	return gencmd.Clean(ctx, generation.HomeSystem{}, cmd.String("target"), gencmd.CleanOptions{
+		Keep:    uint(cmd.Uint("keep")),
+		KeepSet: cmd.IsSet("keep"),
+		From:    from,
+		To:      to,
+		Confirm: cmd.Bool("confirm"),
+		SkipGC:  cmd.Bool("skip-gc"),
+	})
 }

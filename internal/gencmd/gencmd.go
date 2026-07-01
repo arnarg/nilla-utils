@@ -33,6 +33,16 @@ type action struct {
 	keep bool
 }
 
+// CleanOptions configures the behaviour of Clean.
+type CleanOptions struct {
+	Keep    uint
+	KeepSet bool
+	From    *int
+	To      *int
+	Confirm bool
+	SkipGC  bool
+}
+
 // List prints all generations of sys (on target, or locally when target is
 // empty), marking the current one.
 func List(ctx context.Context, sys generation.System, target string) error {
@@ -66,7 +76,15 @@ func List(ctx context.Context, sys generation.System, target string) error {
 // Clean builds a keep/delete plan, asks for confirmation, removes the doomed
 // generation links and runs garbage collection. For systems that require local
 // root privileges it self-elevates before opening the host.
-func Clean(ctx context.Context, sys generation.System, target string, keep uint, confirm bool) error {
+func Clean(ctx context.Context, sys generation.System, target string, opts CleanOptions) error {
+	rangeMode := opts.From != nil || opts.To != nil
+	if rangeMode && opts.KeepSet {
+		return fmt.Errorf("cannot use --keep with --from/--to")
+	}
+	if opts.From != nil && opts.To != nil && *opts.From > *opts.To {
+		return fmt.Errorf("--from cannot be greater than --to")
+	}
+
 	// SelfElevate replaces the process, so it must run before NewHost.
 	if target == "" && sys.RequiresLocalRoot() && !util.IsRoot() {
 		return util.SelfElevate()
@@ -90,7 +108,12 @@ func Clean(ctx context.Context, sys generation.System, target string, keep uint,
 
 	sortDesc(generations)
 
-	actions := buildPlan(generations, current, keep)
+	var actions []action
+	if rangeMode {
+		actions = buildPlanRange(generations, current, opts.From, opts.To)
+	} else {
+		actions = buildPlan(generations, current, opts.Keep)
+	}
 
 	rows := make([][]string, 0, len(actions))
 	for _, a := range actions {
@@ -100,7 +123,7 @@ func Clean(ctx context.Context, sys generation.System, target string, keep uint,
 	printSection("Plan")
 	fmt.Fprintln(os.Stderr, util.RenderTable(sys.Headers(), rows...))
 
-	if !confirm {
+	if !opts.Confirm {
 		ok, err := tui.RunConfirm("Do you want to continue?")
 		if err != nil {
 			return err
@@ -119,6 +142,10 @@ func Clean(ctx context.Context, sys generation.System, target string, keep uint,
 
 	if err := sys.DeleteGenerations(h, toDelete); err != nil {
 		return err
+	}
+
+	if opts.SkipGC {
+		return nil
 	}
 
 	fmt.Fprintln(os.Stderr)
@@ -147,6 +174,27 @@ func buildPlan(gens []generation.Generation, current generation.Generation, keep
 			remaining -= 1
 		}
 
+		actions = append(actions, action{g, doKeep})
+	}
+	return actions
+}
+
+// buildPlanRange marks generations within [from, to] for deletion. A nil bound
+// means unbounded on that side. The current generation is always protected.
+func buildPlanRange(gens []generation.Generation, current generation.Generation, from, to *int) []action {
+	actions := make([]action, 0, len(gens))
+	for _, g := range gens {
+		inRange := true
+		if from != nil && g.ID < *from {
+			inRange = false
+		}
+		if to != nil && g.ID > *to {
+			inRange = false
+		}
+		doKeep := !inRange
+		if g.ID == current.ID {
+			doKeep = true
+		}
 		actions = append(actions, action{g, doKeep})
 	}
 	return actions

@@ -168,6 +168,18 @@ var app = &cli.Command{
 							Aliases: []string{"c"},
 							Usage:   "Do not ask for confirmation",
 						},
+						&cli.IntFlag{
+							Name:  "from",
+							Usage: "Lowest generation number to delete",
+						},
+						&cli.IntFlag{
+							Name:  "to",
+							Usage: "Highest generation number to delete",
+						},
+						&cli.BoolFlag{
+							Name:  "skip-gc",
+							Usage: "Skip garbage collection",
+						},
 					},
 					Action: cleanGenerations,
 				},
