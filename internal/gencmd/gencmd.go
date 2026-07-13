@@ -24,6 +24,11 @@ var (
 			Bold(true).
 			SetString("*").
 			String()
+	rollbackMarker = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("10")).
+			Bold(true).
+			SetString(">").
+			String()
 	keepStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	delStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 )
@@ -40,6 +45,14 @@ type CleanOptions struct {
 	From    *int
 	To      *int
 	Confirm bool
+	SkipGC  bool
+}
+
+// RollbackOptions configures the behaviour of Rollback.
+type RollbackOptions struct {
+	ID      *int
+	Confirm bool
+	Cleanup bool
 	SkipGC  bool
 }
 
@@ -120,7 +133,7 @@ func Clean(ctx context.Context, sys generation.System, target string, opts Clean
 		rows = append(rows, planRow(sys.Row(a.gen), a, a.gen.ID == current.ID))
 	}
 
-	printSection("Plan")
+	printSection("Cleanup Plan")
 	fmt.Fprintln(os.Stderr, util.RenderTable(sys.Headers(), rows...))
 
 	if !opts.Confirm {
@@ -151,6 +164,110 @@ func Clean(ctx context.Context, sys generation.System, target string, opts Clean
 	fmt.Fprintln(os.Stderr)
 	printSection("Collecting garbage from nix store")
 	return sys.CollectGarbage(ctx, h)
+}
+
+// Rollback activates an older generation and, unless suppressed, cleans up all
+// generations newer than the target. When no ID is given it rolls back to the
+// previous generation (current - 1).
+func Rollback(ctx context.Context, sys generation.System, target string, opts RollbackOptions) error {
+	// SelfElevate replaces the process, so it must run before NewHost.
+	if target == "" && sys.RequiresLocalRoot() && !util.IsRoot() {
+		return util.SelfElevate()
+	}
+
+	h, err := exec.NewHost(ctx, target, nil)
+	if err != nil {
+		return err
+	}
+	defer h.Close()
+
+	current, err := sys.Current(h)
+	if err != nil {
+		return err
+	}
+
+	var targetID int
+	if opts.ID != nil {
+		targetID = *opts.ID
+	} else {
+		targetID = current.ID - 1
+		if targetID < 1 {
+			return fmt.Errorf("no previous generation to roll back to")
+		}
+	}
+
+	if targetID == current.ID {
+		return fmt.Errorf("already on generation %d", current.ID)
+	}
+
+	generations, err := sys.List(h)
+	if err != nil {
+		return err
+	}
+
+	// Look for target generation
+	var targetGen generation.Generation
+	targetFound := false
+	for i := range generations {
+		if generations[i].ID == targetID {
+			targetGen = generations[i]
+			targetFound = true
+			break
+		}
+	}
+
+	// Reverse generations for presentation
+	// purposes
+	sortDesc(generations)
+
+	if !targetFound {
+		// Print generations before erroring
+		rows := make([][]string, 0, len(generations))
+		for _, g := range generations {
+			rows = append(rows, withCurrentMarker(sys.Row(g), g.ID == current.ID))
+		}
+
+		fmt.Println(util.RenderTable(sys.Headers(), rows...))
+
+		return fmt.Errorf("generation %d not found", targetID)
+	}
+
+	// Print rollback plan
+	rows := make([][]string, 0, len(generations))
+	for _, g := range generations {
+		rows = append(rows, withCurrentOrRollbackMarker(sys.Row(g), g.ID == current.ID, g.ID == targetGen.ID))
+	}
+
+	printSection("Rollback Plan")
+	fmt.Fprintln(os.Stderr, util.RenderTable(sys.Headers(), rows...))
+
+	if !opts.Confirm {
+		ok, err := tui.RunConfirm("Do you want to continue?")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+	}
+
+	if err := sys.Rollback(ctx, h, targetGen); err != nil {
+		return err
+	}
+
+	if !opts.Cleanup {
+		return nil
+	}
+
+	from := targetID + 1
+
+	fmt.Fprintln(os.Stderr)
+
+	return Clean(ctx, sys, target, CleanOptions{
+		From:    &from,
+		Confirm: opts.Confirm,
+		SkipGC:  opts.SkipGC,
+	})
 }
 
 // buildPlan mirrors the original keep/current heuristic: keep the newest `keep`
@@ -213,6 +330,26 @@ func withCurrentMarker(row []string, current bool) []string {
 	}
 	cells := append([]string(nil), row...)
 	cells[0] = fmt.Sprintf("%s %s", pre, cells[0])
+	return cells
+}
+
+func withCurrentOrRollbackMarker(row []string, current, desired bool) []string {
+	pre := " "
+	style := lipgloss.NewStyle()
+	switch {
+	case current:
+		pre = currentMarker
+	case desired:
+		pre = rollbackMarker
+		style = keepStyle
+	}
+
+	cells := make([]string, len(row))
+	for i, c := range row {
+		cells[i] = style.SetString(c).String()
+	}
+	cells[0] = fmt.Sprintf("%s %s", pre, cells[0])
+
 	return cells
 }
 

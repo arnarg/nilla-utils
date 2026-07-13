@@ -106,6 +106,23 @@ func (NixOSSystem) DeleteGenerations(h exec.Host, gens []Generation) error {
 	return nil
 }
 
+func (NixOSSystem) Rollback(ctx context.Context, h exec.Host, gen Generation) error {
+	if h.IsLocal() {
+		if err := runCmd(ctx, h, "nix-env", "-p", nixosCurrentLink,
+			"--switch-generation", strconv.Itoa(gen.ID)); err != nil {
+			return err
+		}
+		switchp := filepath.Join(gen.path, "bin", "switch-to-configuration")
+		return runCmd(ctx, h, switchp, "switch")
+	}
+	if err := runCmd(ctx, h, "sudo", "nix-env", "-p", nixosCurrentLink,
+		"--switch-generation", strconv.Itoa(gen.ID)); err != nil {
+		return err
+	}
+	switchp := filepath.Join(gen.path, "bin", "switch-to-configuration")
+	return runCmd(ctx, h, "sudo", switchp, "switch")
+}
+
 func (NixOSSystem) CollectGarbage(ctx context.Context, h exec.Host) error {
 	// Local cleanup already elevated to root; remote gc must run under sudo.
 	if h.IsLocal() {
@@ -166,5 +183,16 @@ func runGC(ctx context.Context, h exec.Host, name string, args ...string) error 
 	c.SetStdin(os.Stdin)
 	c.SetStderr(os.Stderr)
 	c.SetStdout(os.Stderr)
+	return c.Run()
+}
+
+func runCmd(ctx context.Context, h exec.Host, name string, args ...string) error {
+	c, err := h.CommandContext(ctx, name, args...)
+	if err != nil {
+		return err
+	}
+	c.SetStdin(os.Stdin)
+	c.SetStderr(os.Stderr)
+	c.SetStdout(os.Stdout)
 	return c.Run()
 }

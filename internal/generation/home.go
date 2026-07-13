@@ -91,6 +91,21 @@ func (HomeSystem) CollectGarbage(ctx context.Context, h exec.Host) error {
 	return runGC(ctx, h, "nix", "store", "gc", "-v")
 }
 
+func (HomeSystem) Rollback(ctx context.Context, h exec.Host, gen Generation) error {
+	// The profile path is the directory of the generation link with the
+	// generation suffix stripped: .../home-manager-38-link -> .../home-manager
+	profile := filepath.Join(filepath.Dir(gen.path), "home-manager")
+	if err := runCmd(ctx, h, "nix-env", "-p", profile,
+		"--switch-generation", strconv.Itoa(gen.ID)); err != nil {
+		return err
+	}
+	// --driver-version 1 tells modern activate scripts to skip profile
+	// management (nix-env --set), which would create a new generation.
+	// Older scripts without the flag silently ignore it and fall back to
+	// legacy behavior, where a new generation is unavoidable.
+	return runCmd(ctx, h, filepath.Join(gen.path, "activate"), "--driver-version", "1")
+}
+
 func buildHomeGeneration(h exec.Host, dir string, e exec.EntryInfo) (Generation, error) {
 	m := homeGenIDRe.FindStringSubmatch(e.Name)
 	if m == nil {

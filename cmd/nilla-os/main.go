@@ -215,6 +215,31 @@ var app = &cli.Command{
 					},
 					Action: cleanGenerations,
 				},
+
+				// Rollback
+				{
+					Name:        "rollback",
+					Aliases:     []string{"rb"},
+					Usage:       "Roll back to a previous generation",
+					Description: "Roll back to a previous generation. Defaults to the previous generation if no ID is given.",
+					ArgsUsage:   "[ID]",
+					Flags: []cli.Flag{
+						&cli.BoolFlag{
+							Name:    "confirm",
+							Aliases: []string{"c"},
+							Usage:   "Do not ask for confirmation",
+						},
+						&cli.BoolFlag{
+							Name:  "cleanup",
+							Usage: "Clean up newer generations after rollback",
+						},
+						&cli.BoolFlag{
+							Name:  "skip-gc",
+							Usage: "Skip garbage collection",
+						},
+					},
+					Action: rollbackGenerations,
+				},
 			},
 		},
 	},

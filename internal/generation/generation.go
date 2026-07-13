@@ -27,6 +27,7 @@ type System interface {
 	Current(h exec.Host) (Generation, error)
 	List(h exec.Host) ([]Generation, error)
 	DeleteGenerations(h exec.Host, gens []Generation) error
+	Rollback(ctx context.Context, h exec.Host, gen Generation) error
 	CollectGarbage(ctx context.Context, h exec.Host) error
 	Headers() []string
 	Row(g Generation) []string
