@@ -110,7 +110,7 @@ func (s *Session) prepareRemoteBuild(ctx context.Context) error {
 	drvPath := strings.TrimSpace(string(evalOut))
 	_, err = nix.Command("copy").
 		Args([]string{"--to", p.StoreAddr, "--derivation", "-s", drvPath}).
-		Executor(exec.NewAskpassExec(s.askpassSrv.SocketPath(), "copy-derivation")).
+		Executor(exec.NewAskpassExec(s.askpassSrv.SocketPath(), s.askpassSrv.Token(), "copy-derivation")).
 		Run(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to copy derivation to remote: %w", err)

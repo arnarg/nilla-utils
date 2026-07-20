@@ -214,12 +214,13 @@ var app = &cli.Command{
 	Action: func(ctx context.Context, cmd *cli.Command) error {
 		if socket := os.Getenv("NILLA_ASKPASS_SOCKET"); socket != "" {
 			commandID := os.Getenv("NILLA_ASKPASS_COMMAND_ID")
+			token := os.Getenv("NILLA_ASKPASS_TOKEN")
 			var prompt string
 			if len(os.Args) > 1 {
 				prompt = os.Args[len(os.Args)-1]
 			}
 			host := askpass.ParseHostFromPrompt(prompt)
-			password, err := askpass.GetPassword(socket, host, commandID)
+			password, err := askpass.GetPassword(socket, host, commandID, token)
 			if err != nil {
 				return err
 			}

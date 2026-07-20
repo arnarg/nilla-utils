@@ -247,13 +247,14 @@ var app = &cli.Command{
 		// Askpass mode, invoked by ssh as SSH_ASKPASS
 		if socket := os.Getenv("NILLA_ASKPASS_SOCKET"); socket != "" {
 			commandID := os.Getenv("NILLA_ASKPASS_COMMAND_ID")
+			token := os.Getenv("NILLA_ASKPASS_TOKEN")
 			// os.Args is ["nilla-os", "user@host's password: "] when invoked as SSH_ASKPASS
 			var prompt string
 			if len(os.Args) > 1 {
 				prompt = os.Args[len(os.Args)-1]
 			}
 			host := askpass.ParseHostFromPrompt(prompt)
-			password, err := askpass.GetPassword(socket, host, commandID)
+			password, err := askpass.GetPassword(socket, host, commandID, token)
 			if err != nil {
 				return err
 			}

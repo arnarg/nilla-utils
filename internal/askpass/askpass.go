@@ -3,6 +3,9 @@ package askpass
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/util"
 	"golang.org/x/term"
 )
@@ -19,6 +23,7 @@ type Server struct {
 	listener   net.Listener
 	socketPath string
 	dirPath    string
+	token      string
 
 	mu         sync.Mutex
 	cache      *PasswordCache
@@ -41,10 +46,19 @@ func NewServer(cache *PasswordCache) (*Server, func(), error) {
 
 	os.Chmod(socketPath, 0600)
 
+	token, err := generateToken()
+	if err != nil {
+		listener.Close()
+		os.Remove(socketPath)
+		os.Remove(dirPath)
+		return nil, nil, fmt.Errorf("failed to generate askpass token: %w", err)
+	}
+
 	srv := &Server{
 		listener:   listener,
 		socketPath: socketPath,
 		dirPath:    dirPath,
+		token:      token,
 		cache:      cache,
 		pending:    make(map[string]*sync.Cond),
 		lastIssuer: make(map[string]string),
@@ -78,6 +92,22 @@ func (s *Server) SocketPath() string {
 	return s.socketPath
 }
 
+// Token returns the per-session secret that children must present to prove they
+// were spawned by this process. It is injected into child environments via
+// NILLA_ASKPASS_TOKEN and verified before any password is served.
+func (s *Server) Token() string {
+	return s.token
+}
+
+// generateToken returns a 256-bit random session secret, hex-encoded.
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
 func (s *Server) Serve(ctx context.Context) error {
 	var closed atomic.Bool
 	go func() {
@@ -101,13 +131,25 @@ func (s *Server) Serve(ctx context.Context) error {
 type request struct {
 	host      string
 	commandID string
+	token     string
 }
 
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 
+	pid, uid, ok := verifyPeer(conn)
+	if !ok {
+		log.Errorf("askpass: rejected connection from pid %d uid %d: failed peer verification", pid, uid)
+		return
+	}
+
 	req, err := readRequest(conn)
 	if err != nil {
+		return
+	}
+
+	if subtle.ConstantTimeCompare([]byte(req.token), []byte(s.token)) != 1 {
+		log.Errorf("askpass: rejected connection from pid %d uid %d: invalid token", pid, uid)
 		return
 	}
 
@@ -175,9 +217,14 @@ func readRequest(conn net.Conn) (*request, error) {
 	if err != nil {
 		return nil, err
 	}
+	token, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
 	return &request{
 		host:      strings.TrimRight(host, "\n"),
 		commandID: strings.TrimRight(commandID, "\n"),
+		token:     strings.TrimRight(token, "\n"),
 	}, nil
 }
 
@@ -207,14 +254,14 @@ func ParseHostFromPrompt(prompt string) string {
 	return prompt
 }
 
-func GetPassword(socketPath, host, commandID string) (string, error) {
+func GetPassword(socketPath, host, commandID, token string) (string, error) {
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to askpass socket: %w", err)
 	}
 	defer conn.Close()
 
-	fmt.Fprintf(conn, "%s\n%s\n", host, commandID)
+	fmt.Fprintf(conn, "%s\n%s\n%s\n", host, commandID, token)
 
 	reader := bufio.NewReader(conn)
 	password, err := reader.ReadString('\n')

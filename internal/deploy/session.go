@@ -99,14 +99,14 @@ func (s *Session) Close() {
 
 func (s *Session) BuildExecutor() exec.Executor {
 	if s.askpassSrv != nil && s.Plan.StoreAddr != "" {
-		return exec.NewAskpassExec(s.askpassSrv.SocketPath(), "remote-build")
+		return exec.NewAskpassExec(s.askpassSrv.SocketPath(), s.askpassSrv.Token(), "remote-build")
 	}
 	return s.local
 }
 
 func (s *Session) CopyExecutor() exec.Executor {
 	if s.askpassSrv != nil {
-		return exec.NewAskpassExec(s.askpassSrv.SocketPath(), "copy-closure")
+		return exec.NewAskpassExec(s.askpassSrv.SocketPath(), s.askpassSrv.Token(), "copy-closure")
 	}
 	return s.local
 }

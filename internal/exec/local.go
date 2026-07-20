@@ -77,12 +77,13 @@ func (c *localCommand) Run() error {
 	return c.Cmd.Run()
 }
 
-func NewAskpassExec(socketPath, commandID string) Executor {
+func NewAskpassExec(socketPath, token, commandID string) Executor {
 	self, _ := os.Executable()
 	return NewLocalExecutor(
 		"SSH_ASKPASS="+self,
 		"SSH_ASKPASS_REQUIRE=force",
 		"NILLA_ASKPASS_SOCKET="+socketPath,
+		"NILLA_ASKPASS_TOKEN="+token,
 		"NILLA_ASKPASS_COMMAND_ID="+commandID,
 	)
 }
