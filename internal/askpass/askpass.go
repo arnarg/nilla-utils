@@ -20,9 +20,10 @@ type Server struct {
 	socketPath string
 	dirPath    string
 
-	mu      sync.Mutex
-	cache   *PasswordCache
-	pending map[string]*sync.Cond
+	mu         sync.Mutex
+	cache      *PasswordCache
+	pending    map[string]*sync.Cond
+	lastIssuer map[string]string
 }
 
 func NewServer(cache *PasswordCache) (*Server, func(), error) {
@@ -46,6 +47,7 @@ func NewServer(cache *PasswordCache) (*Server, func(), error) {
 		dirPath:    dirPath,
 		cache:      cache,
 		pending:    make(map[string]*sync.Cond),
+		lastIssuer: make(map[string]string),
 	}
 
 	cleanup := func() {
@@ -110,7 +112,17 @@ func (s *Server) handleConn(conn net.Conn) {
 	}
 
 	s.mu.Lock()
+	// Same commandID asking again for a host we have a cached password for
+	// means the previous consumer's password was rejected. Invalidate the
+	// cache entry and re-prompt. A different commandID means the previous
+	// consumer succeeded (the session would otherwise have aborted), so the
+	// cached password is still good.
+	if last, ok := s.lastIssuer[req.host]; ok && last == req.commandID {
+		s.cache.Delete(req.host)
+		delete(s.lastIssuer, req.host)
+	}
 	if password, ok := s.cache.Get(req.host); ok {
+		s.lastIssuer[req.host] = req.commandID
 		s.mu.Unlock()
 		fmt.Fprintln(conn, password)
 		return
@@ -121,6 +133,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		cond.L.Lock()
 		cond.Wait()
 		cond.L.Unlock()
+		s.mu.Lock()
+		s.lastIssuer[req.host] = req.commandID
 		password, _ := s.cache.Get(req.host)
 		s.mu.Unlock()
 		fmt.Fprintln(conn, password)
@@ -136,6 +150,7 @@ func (s *Server) handleConn(conn net.Conn) {
 	s.cache.Set(req.host, password)
 
 	s.mu.Lock()
+	s.lastIssuer[req.host] = req.commandID
 	delete(s.pending, req.host)
 	s.mu.Unlock()
 

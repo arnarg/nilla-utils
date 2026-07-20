@@ -23,3 +23,9 @@ func (c *PasswordCache) Set(host, password string) {
 	defer c.mu.Unlock()
 	c.data[host] = password
 }
+
+func (c *PasswordCache) Delete(host string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.data, host)
+}
