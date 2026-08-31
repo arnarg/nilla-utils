@@ -178,23 +178,37 @@ func levelStyle(level log.Level, clr color.Color) lipgloss.Style {
 		Foreground(clr)
 }
 
-// ParseTarget parses a target string in the format "user@host" or "host" and returns
-// the user and hostname. If no user is specified, it returns an empty string for user.
-func ParseTarget(target string) (user, hostname string) {
+// ParseTarget parses a target string in the format "user@host:port", "user@host", "host:port", or "host"
+// and returns the user, hostname, and port. If no user is specified, it returns an empty string for user.
+// If no port is specified, it returns an empty string for port.
+func ParseTarget(target string) (user, hostname, port string) {
 	parts := strings.Split(target, "@")
 	if len(parts) == 2 {
-		return parts[0], parts[1]
+		user = parts[0]
+		hostname = parts[1]
+	} else {
+		hostname = parts[0]
 	}
-	return "", target
+	if host, portStr, hasPort := strings.Cut(hostname, ":"); hasPort {
+		hostname = host
+		port = portStr
+	}
+	return
 }
 
 // BuildStoreAddress constructs an ssh-ng:// store address from user and hostname.
 // If user is empty, it uses the current local user as default (matching SSH executor behavior).
-func BuildStoreAddress(user, hostname string) string {
+// If port is non-empty, it is appended as a ?port= query parameter (supported by both Nix
+// and Lix, unlike the host:port authority syntax which requires Nix >= 2.31).
+func BuildStoreAddress(user, hostname, port string) string {
 	if user == "" {
 		user = GetUser()
 	}
-	return fmt.Sprintf("ssh-ng://%s@%s", user, hostname)
+	addr := fmt.Sprintf("ssh-ng://%s@%s", user, hostname)
+	if port != "" {
+		addr += "?port=" + port
+	}
+	return addr
 }
 
 // TrimSpaceAnsi combines strings.TrimSpace with ANSI-aware newline removal

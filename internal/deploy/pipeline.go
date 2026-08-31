@@ -52,16 +52,32 @@ func resolveCopy(p *Plan, outPath string) copyPlan {
 		return copyPlan{skip: true}
 	}
 
-	args := []string{"--to", fmt.Sprintf("ssh://%s", p.DeployTarget)}
+	args := []string{"--to", buildSSHURL(p.DeployTarget, p.DeployPort)}
 
 	if p.BuildTarget != "" && p.BuildTarget != p.DeployTarget {
-		user, hostname := util.ParseTarget(p.BuildTarget)
-		args = append(args, "--from", util.BuildStoreAddress(user, hostname))
+		user, hostname, _ := util.ParseTarget(p.BuildTarget)
+		args = append(args, "--from", util.BuildStoreAddress(user, hostname, p.BuildPort))
 	}
 
 	args = append(args, outPath)
 
 	return copyPlan{args: args}
+}
+
+func buildSSHURL(target, port string) string {
+	user, hostname, _ := util.ParseTarget(target)
+	return buildSSHURLFromParts(user, hostname, port)
+}
+
+func buildSSHURLFromParts(user, hostname, port string) string {
+	if user == "" {
+		user = util.GetUser()
+	}
+	addr := fmt.Sprintf("ssh://%s@%s", user, hostname)
+	if port != "" {
+		addr += "?port=" + port
+	}
+	return addr
 }
 
 func (s *Session) Build(ctx context.Context) (string, error) {

@@ -63,6 +63,9 @@ type Plan struct {
 	DeployTarget string
 	StoreAddr    string
 
+	BuildPort  string
+	DeployPort string
+
 	Raw     bool
 	Verbose bool
 	Compact bool
@@ -103,6 +106,7 @@ func ResolvePlan(opts Options, sys System) (*Plan, error) {
 
 	// Infer build target
 	buildTarget := ""
+	buildPort := ""
 	if opts.BuildOn != "" {
 		buildTarget = opts.BuildOn
 	} else if opts.BuildOnSelf {
@@ -112,11 +116,20 @@ func ResolvePlan(opts Options, sys System) (*Plan, error) {
 		buildTarget = opts.Target
 	}
 
+	// Parse ports from targets
+	if buildTarget != "" {
+		_, _, buildPort = util.ParseTarget(buildTarget)
+	}
+	deployPort := ""
+	if opts.Target != "" {
+		_, _, deployPort = util.ParseTarget(opts.Target)
+	}
+
 	// Find store address for remote build (if enabled)
 	storeAddr := ""
 	if buildTarget != "" {
-		user, hostname := util.ParseTarget(buildTarget)
-		storeAddr = util.BuildStoreAddress(user, hostname)
+		user, hostname, _ := util.ParseTarget(buildTarget)
+		storeAddr = util.BuildStoreAddress(user, hostname, buildPort)
 	}
 
 	return &Plan{
@@ -127,6 +140,8 @@ func ResolvePlan(opts Options, sys System) (*Plan, error) {
 		BuildTarget:  buildTarget,
 		DeployTarget: opts.Target,
 		StoreAddr:    storeAddr,
+		BuildPort:    buildPort,
+		DeployPort:   deployPort,
 		Raw:          opts.Raw,
 		Verbose:      opts.Verbose,
 		Compact:      opts.Compact,

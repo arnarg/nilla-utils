@@ -115,48 +115,78 @@ func TestParseTarget(t *testing.T) {
 		target       string
 		expectedUser string
 		expectedHost string
+		expectedPort string
 	}{
 		{
 			name:         "host only",
 			target:       "hostname",
 			expectedUser: "",
 			expectedHost: "hostname",
+			expectedPort: "",
 		},
 		{
 			name:         "user and host",
 			target:       "user@hostname",
 			expectedUser: "user",
 			expectedHost: "hostname",
+			expectedPort: "",
 		},
 		{
 			name:         "root and host",
 			target:       "root@hostname",
 			expectedUser: "root",
 			expectedHost: "hostname",
+			expectedPort: "",
 		},
 		{
 			name:         "host with domain",
 			target:       "hostname.example.com",
 			expectedUser: "",
 			expectedHost: "hostname.example.com",
+			expectedPort: "",
 		},
 		{
 			name:         "user and host with domain",
 			target:       "user@hostname.example.com",
 			expectedUser: "user",
 			expectedHost: "hostname.example.com",
+			expectedPort: "",
+		},
+		{
+			name:         "host with port",
+			target:       "hostname:2222",
+			expectedUser: "",
+			expectedHost: "hostname",
+			expectedPort: "2222",
+		},
+		{
+			name:         "user and host with port",
+			target:       "user@hostname:2222",
+			expectedUser: "user",
+			expectedHost: "hostname",
+			expectedPort: "2222",
+		},
+		{
+			name:         "user and localhost with port",
+			target:       "user@localhost:2222",
+			expectedUser: "user",
+			expectedHost: "localhost",
+			expectedPort: "2222",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			user, hostname := ParseTarget(tt.target)
+			user, hostname, port := ParseTarget(tt.target)
 
 			if user != tt.expectedUser {
 				t.Errorf("expected user '%s', got '%s'", tt.expectedUser, user)
 			}
 			if hostname != tt.expectedHost {
 				t.Errorf("expected hostname '%s', got '%s'", tt.expectedHost, hostname)
+			}
+			if port != tt.expectedPort {
+				t.Errorf("expected port '%s', got '%s'", tt.expectedPort, port)
 			}
 		})
 	}
@@ -167,6 +197,7 @@ func TestBuildStoreAddress(t *testing.T) {
 		name           string
 		user           string
 		hostname       string
+		port           string
 		expectedOutput string
 	}{
 		{
@@ -199,11 +230,25 @@ func TestBuildStoreAddress(t *testing.T) {
 			hostname:       "hostname.example.com",
 			expectedOutput: fmt.Sprintf("ssh-ng://%s@hostname.example.com", GetUser()),
 		},
+		{
+			name:           "hostname with port",
+			user:           "user",
+			hostname:       "hostname",
+			port:           "2222",
+			expectedOutput: "ssh-ng://user@hostname?port=2222",
+		},
+		{
+			name:           "empty user with port",
+			user:           "",
+			hostname:       "hostname",
+			port:           "2222",
+			expectedOutput: fmt.Sprintf("ssh-ng://%s@hostname?port=2222", GetUser()),
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := BuildStoreAddress(tt.user, tt.hostname)
+			result := BuildStoreAddress(tt.user, tt.hostname, tt.port)
 
 			if result != tt.expectedOutput {
 				t.Errorf("expected '%s', got '%s'", tt.expectedOutput, result)

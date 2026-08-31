@@ -232,7 +232,7 @@ func ParseHostFromPrompt(prompt string) string {
 	// Standard password auth: "user@host's password: "
 	if idx := strings.Index(prompt, "'s"); idx > 0 {
 		target := prompt[:idx]
-		user, hostname := util.ParseTarget(target)
+		user, hostname, _ := util.ParseTarget(target)
 		if user == "" {
 			user = util.GetUser()
 		}
@@ -243,7 +243,7 @@ func ParseHostFromPrompt(prompt string) string {
 	if strings.HasPrefix(prompt, "(") {
 		if idx := strings.Index(prompt, ")"); idx > 1 {
 			target := prompt[1:idx]
-			user, hostname := util.ParseTarget(target)
+			user, hostname, _ := util.ParseTarget(target)
 			if user == "" {
 				user = util.GetUser()
 			}

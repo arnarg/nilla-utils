@@ -50,6 +50,32 @@ func TestResolveCopy(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "deploy target with port",
+			plan: &Plan{
+				DeployTarget: "user@deployhost",
+				DeployPort:   "2222",
+			},
+			want: copyPlan{
+				args: []string{"--to", "ssh://user@deployhost?port=2222", outPath},
+			},
+		},
+		{
+			name: "build and deploy with ports",
+			plan: &Plan{
+				BuildTarget:  "builduser@builder",
+				BuildPort:    "2222",
+				DeployTarget: "deployuser@deployhost",
+				DeployPort:   "3333",
+			},
+			want: copyPlan{
+				args: []string{
+					"--to", "ssh://deployuser@deployhost?port=3333",
+					"--from", "ssh-ng://builduser@builder?port=2222",
+					outPath,
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
