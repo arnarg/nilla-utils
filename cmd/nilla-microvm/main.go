@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	goexec "os/exec"
@@ -602,25 +603,29 @@ func runMicroVM(ctx context.Context, cmd *cli.Command) error {
 		}()
 	}
 
-	// Start virtiofsd services
+	// Start virtiofsd services if shares are configured
 	virtiofsdRunPath := filepath.Join(declaredRunner, "bin", "virtiofsd-run")
-	supervisordLogPath := filepath.Join(tempDir, "supervisord.log")
-	printSection("Starting virtiofsd services")
+	if _, err := os.Stat(virtiofsdRunPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to stat virtiofsd-run: %w", err)
+	} else if err == nil {
+		supervisordLogPath := filepath.Join(tempDir, "supervisord.log")
+		printSection("Starting virtiofsd services")
 
-	runner := microvm.NewVirtiofsdRunner(virtiofsdRunPath, tempDir, supervisordLogPath)
-	if err := runner.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start virtiofsd services: %w", err)
-	}
-	defer runner.Stop()
-
-	// Wait for all supervisord processes to be running
-	go func() {
-		for name := range runner.Running() {
-			fmt.Printf("Process running: %s\n", name)
+		runner := microvm.NewVirtiofsdRunner(virtiofsdRunPath, tempDir, supervisordLogPath)
+		if err := runner.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start virtiofsd services: %w", err)
 		}
-	}()
-	if err := <-runner.Ready(); err != nil {
-		return fmt.Errorf("virtiofsd services failed: %w", err)
+		defer runner.Stop()
+
+		// Wait for all supervisord processes to be running
+		go func() {
+			for name := range runner.Running() {
+				fmt.Printf("Process running: %s\n", name)
+			}
+		}()
+		if err := <-runner.Ready(); err != nil {
+			return fmt.Errorf("virtiofsd services failed: %w", err)
+		}
 	}
 
 	// Run microvm-run in the foreground
