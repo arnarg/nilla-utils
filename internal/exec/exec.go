@@ -2,7 +2,11 @@ package exec
 
 import (
 	"context"
+	"errors"
 	"io"
+	osexec "os/exec"
+
+	"golang.org/x/crypto/ssh"
 )
 
 type Executor interface {
@@ -22,4 +26,18 @@ type Command interface {
 	StdinPipe() (io.WriteCloser, error)
 	StdoutPipe() (io.Reader, error)
 	StderrPipe() (io.Reader, error)
+}
+
+// ExitCode returns the exit status of a command run locally or over SSH, or -1
+// if the error is not an exit error.
+func ExitCode(err error) int {
+	var lexec *osexec.ExitError
+	if errors.As(err, &lexec) {
+		return lexec.ExitCode()
+	}
+	var sexec *ssh.ExitError
+	if errors.As(err, &sexec) {
+		return sexec.ExitStatus()
+	}
+	return -1
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/diff"
 	"github.com/arnarg/nilla-utils/internal/exec"
 )
@@ -38,7 +39,7 @@ func (NixOSSystem) Activate(ctx context.Context, target exec.Executor, outPath s
 	if cmd == Test || cmd == Switch {
 		fmt.Fprintln(os.Stderr)
 		printSection("Activating configuration")
-		if err := runSwitchToConfig(target, outPath, "test", cmd == Switch); err != nil {
+		if err := runSwitchToConfig(target, outPath, "test"); err != nil {
 			return err
 		}
 	}
@@ -49,13 +50,19 @@ func (NixOSSystem) Activate(ctx context.Context, target exec.Executor, outPath s
 		if err := setProfile(target, outPath); err != nil {
 			return err
 		}
-		return runSwitchToConfig(target, outPath, "boot", false)
+		return runSwitchToConfig(target, outPath, "boot")
 	}
 
 	return nil
 }
 
-func runSwitchToConfig(target exec.Executor, outPath string, action string, ignoreError bool) error {
+// switch-to-configuration exits with 4 when the configuration was activated
+// but some systemd units failed to restart. That is a warning, not a failure,
+// so it is tolerated and reported. Any other error, e.g. a rejected sudo
+// password, is a failure.
+const switchToConfigUnitFailures = 4
+
+func runSwitchToConfig(target exec.Executor, outPath string, action string) error {
 	switchp := fmt.Sprintf("%s/bin/switch-to-configuration", outPath)
 	c, err := target.Command("sudo", switchp, action)
 	if err != nil {
@@ -64,7 +71,11 @@ func runSwitchToConfig(target exec.Executor, outPath string, action string, igno
 	c.SetStdin(os.Stdin)
 	c.SetStderr(os.Stderr)
 	c.SetStdout(os.Stdout)
-	if err := c.Run(); err != nil && !ignoreError {
+	if err := c.Run(); err != nil {
+		if exec.ExitCode(err) == switchToConfigUnitFailures {
+			log.Warnf("Some systemd units failed to restart, check the output above for details")
+			return nil
+		}
 		return err
 	}
 	return nil
