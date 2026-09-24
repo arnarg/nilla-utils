@@ -233,6 +233,69 @@ func TestNewSession_diffExecutorSSHError(t *testing.T) {
 	}
 }
 
+func TestNewSession_noDiffSkipsDiffExecutor(t *testing.T) {
+	local := &mockExecutor{isLocal: true}
+	target := &mockExecutor{isLocal: false}
+
+	sshCalls := []string{}
+	deps := SessionDeps{
+		NewLocal: func() exec.Executor { return local },
+		NewSSH: func(tgt string, cache *askpass.PasswordCache) (exec.Executor, error) {
+			sshCalls = append(sshCalls, tgt)
+			return target, nil
+		},
+		NewAskpass: askpass.NewServer,
+	}
+
+	plan := &Plan{
+		SubCmd:       Switch,
+		DeployTarget: "user@deployhost",
+		NoDiff:       true,
+	}
+
+	s, err := NewSession(context.Background(), plan, NixOSSystem{}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if s.forDiff != nil {
+		t.Error("forDiff should be nil when NoDiff is set")
+	}
+	if len(sshCalls) != 1 {
+		t.Errorf("expected 1 NewSSH call (deploy target only), got %d: %v", len(sshCalls), sshCalls)
+	}
+}
+
+func TestNewSession_noDiffAvoidsDiffExecutorSSHError(t *testing.T) {
+	deps := SessionDeps{
+		NewLocal: func() exec.Executor { return &mockExecutor{isLocal: true} },
+		NewSSH: func(tgt string, cache *askpass.PasswordCache) (exec.Executor, error) {
+			if tgt == "deployuser@deployhost" {
+				return &mockExecutor{isLocal: false}, nil
+			}
+			return nil, fmt.Errorf("SSH failed for %s", tgt)
+		},
+		NewAskpass: askpass.NewServer,
+	}
+
+	s, err := NewSession(context.Background(), &Plan{
+		SubCmd:       Switch,
+		BuildTarget:  "builduser@builder",
+		DeployTarget: "deployuser@deployhost",
+		StoreAddr:    "ssh-ng://builduser@builder",
+		NoDiff:       true,
+	}, NixOSSystem{}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if s.forDiff != nil {
+		t.Error("forDiff should be nil when NoDiff is set")
+	}
+}
+
 func TestSession_BuildExecutor(t *testing.T) {
 	t.Run("local build returns local executor", func(t *testing.T) {
 		local := &mockExecutor{isLocal: true}

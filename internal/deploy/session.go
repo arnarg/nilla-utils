@@ -80,12 +80,14 @@ func NewSession(ctx context.Context, plan *Plan, sys System, deps SessionDeps) (
 
 	// Get an executor for reading new generation for diff
 	// comparison with previous generation
-	forDiff, err := s.resolveDiffExecutor(deps)
-	if err != nil {
-		s.Close()
-		return nil, err
+	if !plan.NoDiff {
+		forDiff, err := s.resolveDiffExecutor(deps)
+		if err != nil {
+			s.Close()
+			return nil, err
+		}
+		s.forDiff = forDiff
 	}
-	s.forDiff = forDiff
 
 	return s, nil
 }

@@ -121,6 +121,10 @@ var app = &cli.Command{
 					Aliases: []string{"c"},
 					Usage:   "Do not ask for confirmation",
 				},
+				&cli.BoolFlag{
+					Name:  "no-diff",
+					Usage: "Skip comparing generations before activating",
+				},
 			},
 			Action: actionFuncFor(deploy.Switch),
 		},
@@ -259,6 +263,7 @@ func run(ctx context.Context, cmd *cli.Command, sc deploy.Command) error {
 		OutLink:     cmd.String("out-link"),
 		Confirm:     cmd.Bool("confirm"),
 		Notify:      cmd.Bool("notify"),
+		NoDiff:      cmd.Bool("no-diff"),
 	}, deploy.HomeSystem{})
 	if err != nil {
 		return err

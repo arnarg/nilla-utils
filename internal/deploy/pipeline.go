@@ -136,6 +136,11 @@ func (s *Session) prepareRemoteBuild(ctx context.Context) error {
 }
 
 func (s *Session) Diff(ctx context.Context, outPath string) error {
+	if s.Plan.NoDiff {
+		log.Debug("Skipping diff (--no-diff)")
+		return nil
+	}
+
 	fmt.Fprintln(os.Stderr)
 	printSection("Comparing changes")
 
@@ -150,8 +155,8 @@ func (s *Session) Diff(ctx context.Context, outPath string) error {
 		&diff.Generation{Path: current.Path, Querier: current.Querier},
 		&diff.Generation{Path: outPath, Querier: diff.NewExecutorQuerier(s.forDiff)},
 	); err != nil {
-		log.Debugf("Diff execution failed with error: %v", err)
-		return fmt.Errorf("failed to compare changes: %w", err)
+		log.Warnf("Failed to compare changes, skipping diff: %v", err)
+		return nil
 	}
 	log.Debugf("Diff execution completed successfully")
 

@@ -121,6 +121,10 @@ var app = &cli.Command{
 					Aliases: []string{"c"},
 					Usage:   "Do not ask for confirmation",
 				},
+				&cli.BoolFlag{
+					Name:  "no-diff",
+					Usage: "Skip comparing generations before activating",
+				},
 			},
 			Action: actionFuncFor(deploy.Test),
 		},
@@ -137,6 +141,10 @@ var app = &cli.Command{
 					Aliases: []string{"c"},
 					Usage:   "Do not ask for confirmation",
 				},
+				&cli.BoolFlag{
+					Name:  "no-diff",
+					Usage: "Skip comparing generations before activating",
+				},
 			},
 			Action: actionFuncFor(deploy.Boot),
 		},
@@ -152,6 +160,10 @@ var app = &cli.Command{
 					Name:    "confirm",
 					Aliases: []string{"c"},
 					Usage:   "Do not ask for confirmation",
+				},
+				&cli.BoolFlag{
+					Name:  "no-diff",
+					Usage: "Skip comparing generations before activating",
 				},
 			},
 			Action: actionFuncFor(deploy.Switch),
@@ -293,6 +305,7 @@ func run(ctx context.Context, cmd *cli.Command, sc deploy.Command) error {
 		OutLink:     cmd.String("out-link"),
 		Confirm:     cmd.Bool("confirm"),
 		Notify:      cmd.Bool("notify"),
+		NoDiff:      cmd.Bool("no-diff"),
 	}, deploy.NixOSSystem{})
 	if err != nil {
 		return err

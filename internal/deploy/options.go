@@ -51,6 +51,8 @@ type Options struct {
 
 	Confirm bool
 	Notify  bool
+
+	NoDiff bool
 }
 
 type Plan struct {
@@ -75,6 +77,8 @@ type Plan struct {
 
 	Confirm bool
 	Notify  bool
+
+	NoDiff bool
 }
 
 func ResolvePlan(opts Options, sys System) (*Plan, error) {
@@ -149,5 +153,6 @@ func ResolvePlan(opts Options, sys System) (*Plan, error) {
 		OutLink:      opts.OutLink,
 		Confirm:      opts.Confirm,
 		Notify:       opts.Notify,
+		NoDiff:       opts.NoDiff,
 	}, nil
 }
