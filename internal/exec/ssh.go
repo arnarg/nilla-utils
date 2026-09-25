@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -101,6 +102,29 @@ func (e *sshExecutor) IsLocal() bool {
 	return false
 }
 
+// safeRemoteChars matches arguments that can be passed through the remote
+// login shell unquoted. Note that '*' is included on purpose: ReadDir passes
+// "dir/*" and relies on the remote shell expanding the glob.
+var safeRemoteChars = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./\*-]+$`)
+
+// shellQuote quotes an argument for safe passage through the remote login
+// shell, which re-splits the command string sent over the SSH session.
+func shellQuote(arg string) string {
+	if safeRemoteChars.MatchString(arg) {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+}
+
+func buildRemoteCmd(cmd string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, shellQuote(cmd))
+	for _, a := range args {
+		parts = append(parts, shellQuote(a))
+	}
+	return strings.Join(parts, " ")
+}
+
 type sshCommand struct {
 	sess *ssh.Session
 	cmd  string
@@ -147,7 +171,7 @@ func (c *sshCommand) Run() error {
 
 func (c *sshCommand) Start() error {
 	// Build command string
-	cmd := fmt.Sprintf("%s %s", c.cmd, strings.Join(c.args, " "))
+	cmd := buildRemoteCmd(c.cmd, c.args)
 
 	// If we're running sudo, we should request a pty
 	if c.cmd == "sudo" && c.sess.Stdin != nil {

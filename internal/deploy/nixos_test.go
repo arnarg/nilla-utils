@@ -1,6 +1,8 @@
 package deploy
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -55,4 +57,35 @@ func TestNixOSSystem_ResolveName(t *testing.T) {
 			t.Error("expected non-empty hostname")
 		}
 	})
+}
+
+func TestSwitchToConfigArgs(t *testing.T) {
+	const out = "/nix/store/abc123-nixos-system-host"
+
+	t.Run("test runs switch-to-configuration directly", func(t *testing.T) {
+		want := []string{"sudo", out + "/bin/switch-to-configuration", "test"}
+		got := switchToConfigArgs(out, "test")
+		if !slices.Equal(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	for _, action := range []string{"boot", "switch"} {
+		t.Run(action+" sets profile in the same privileged shell", func(t *testing.T) {
+			got := switchToConfigArgs(out, action)
+			if len(got) != 4 {
+				t.Fatalf("got %v, want 4 args", got)
+			}
+			if got[0] != "sudo" || got[1] != "/bin/sh" || got[2] != "-c" {
+				t.Errorf("got %v, want a single sudo /bin/sh -c invocation", got)
+			}
+			want := fmt.Sprintf(
+				"nix-env -p %q --set %q && exec %q %s",
+				systemProfile, out, out+"/bin/switch-to-configuration", action,
+			)
+			if got[3] != want {
+				t.Errorf("script = %q, want %q", got[3], want)
+			}
+		})
+	}
 }

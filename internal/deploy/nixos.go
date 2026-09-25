@@ -36,23 +36,20 @@ func (NixOSSystem) CurrentGeneration(executor exec.Executor, _ string) (*Generat
 }
 
 func (NixOSSystem) Activate(ctx context.Context, target exec.Executor, outPath string, cmd Command) error {
-	if cmd == Test || cmd == Switch {
+	switch cmd {
+	case Test:
 		fmt.Fprintln(os.Stderr)
 		printSection("Activating configuration")
-		if err := runSwitchToConfig(target, outPath, "test"); err != nil {
-			return err
-		}
-	}
-
-	if cmd == Boot || cmd == Switch {
+		return runSwitchToConfig(target, outPath, "test")
+	case Boot:
 		fmt.Fprintln(os.Stderr)
 		printSection("Adding configuration to bootloader")
-		if err := setProfile(target, outPath); err != nil {
-			return err
-		}
 		return runSwitchToConfig(target, outPath, "boot")
+	case Switch:
+		fmt.Fprintln(os.Stderr)
+		printSection("Activating configuration")
+		return runSwitchToConfig(target, outPath, "switch")
 	}
-
 	return nil
 }
 
@@ -62,9 +59,16 @@ func (NixOSSystem) Activate(ctx context.Context, target exec.Executor, outPath s
 // password, is a failure.
 const switchToConfigUnitFailures = 4
 
-func runSwitchToConfig(target exec.Executor, outPath string, action string) error {
-	switchp := fmt.Sprintf("%s/bin/switch-to-configuration", outPath)
-	c, err := target.Command("sudo", switchp, action)
+// runSwitchToConfig runs <outPath>/bin/switch-to-configuration <action>.
+//
+// For boot and switch, the system profile must point to the new toplevel
+// first, since the bootloader installers enumerate generations from the
+// profile. Profile update and activation are batched into one privileged
+// shell so that hosts without a cached sudo credential only prompt for a
+// password once. This mirrors what nixos-rebuild does.
+func runSwitchToConfig(target exec.Executor, outPath, action string) error {
+	args := switchToConfigArgs(outPath, action)
+	c, err := target.Command(args[0], args[1:]...)
 	if err != nil {
 		return err
 	}
@@ -81,18 +85,14 @@ func runSwitchToConfig(target exec.Executor, outPath string, action string) erro
 	return nil
 }
 
-func setProfile(target exec.Executor, outPath string) error {
-	c, err := target.Command(
-		"sudo", "nix", "build",
-		"--no-link", "--profile", systemProfile,
-		"--extra-experimental-features", "nix-command",
-		outPath,
-	)
-	if err != nil {
-		return err
+func switchToConfigArgs(outPath, action string) []string {
+	switchp := fmt.Sprintf("%s/bin/switch-to-configuration", outPath)
+	if action == "test" {
+		return []string{"sudo", switchp, action}
 	}
-	c.SetStdin(os.Stdin)
-	c.SetStderr(os.Stderr)
-	c.SetStdout(os.Stdout)
-	return c.Run()
+	script := fmt.Sprintf(
+		"nix-env -p %q --set %q && exec %q %s",
+		systemProfile, outPath, switchp, action,
+	)
+	return []string{"sudo", "/bin/sh", "-c", script}
 }
