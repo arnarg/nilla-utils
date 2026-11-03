@@ -1,8 +1,10 @@
 package exec
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -406,12 +408,18 @@ func buildDefaultConfig(host, port string) (*ssh.ClientConfig, error) {
 	// Get known hosts file
 	knownHostsFiles := getKnownHostsFiles(settings, host)
 	kh, err := knownhosts.New(knownHostsFiles...)
-	if err == nil {
-		conf.HostKeyCallback = kh.HostKeyCallback()
-		conf.HostKeyAlgorithms = kh.HostKeyAlgorithms(fmt.Sprintf("%s:%s", host, port))
-	} else {
-		return nil, err
+	if err != nil {
+		// OpenSSH 10.6+ writes post-quantum host keys (e.g. ssh-mldsa44-ed25519)
+		// that x/crypto/ssh cannot parse yet. OpenSSH itself ignores such lines,
+		// so retry without them instead of failing every connection.
+		log.Warnf("Ignoring unsupported known_hosts entries: %v", err)
+		kh, err = newFilteredKnownHosts(knownHostsFiles)
+		if err != nil {
+			return nil, err
+		}
 	}
+	conf.HostKeyCallback = kh.HostKeyCallback()
+	conf.HostKeyAlgorithms = kh.HostKeyAlgorithms(fmt.Sprintf("%s:%s", host, port))
 
 	return conf, nil
 }
@@ -433,6 +441,81 @@ func getKnownHostsFiles(settings *ssh_config.UserSettings, host string) []string
 	}
 
 	return []string{resolvePath(defaultKnownHosts)}
+}
+
+func newFilteredKnownHosts(files []string) (knownhosts.HostKeyCallback, error) {
+	dir, err := os.MkdirTemp("", "nilla-knownhosts-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+
+	filtered := make([]string, 0, len(files))
+	for _, file := range files {
+		f, err := filterKnownHostsFile(file, dir)
+		if err != nil {
+			return nil, err
+		}
+		filtered = append(filtered, f)
+	}
+
+	return knownhosts.New(filtered...)
+}
+
+func filterKnownHostsFile(path, dir string) (string, error) {
+	in, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+
+	out, err := os.CreateTemp(dir, "known_hosts-")
+	if err != nil {
+		return "", err
+	}
+
+	writer := bufio.NewWriter(out)
+	scanner := bufio.NewScanner(in)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if isParseableKnownHostsLine(line) {
+			if _, err := writer.WriteString(line + "\n"); err != nil {
+				out.Close()
+				return "", err
+			}
+		} else {
+			log.Debugf("Skipping unsupported known_hosts entry in %s", path)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		out.Close()
+		return "", err
+	}
+	if err := writer.Flush(); err != nil {
+		out.Close()
+		return "", err
+	}
+
+	return out.Name(), out.Close()
+}
+
+func isParseableKnownHostsLine(line string) bool {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+		return true
+	}
+	if strings.HasPrefix(fields[0], "@") {
+		fields = fields[1:]
+	}
+	if len(fields) < 3 {
+		return true
+	}
+	blob, err := base64.StdEncoding.DecodeString(fields[2])
+	if err != nil {
+		return true
+	}
+	_, err = ssh.ParsePublicKey(blob)
+	return err == nil
 }
 
 func resolvePath(p string) string {

@@ -1,6 +1,17 @@
 package exec
 
-import "testing"
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/skeema/knownhosts"
+	"golang.org/x/crypto/ssh"
+)
 
 func TestParseTarget(t *testing.T) {
 	tests := []struct {
@@ -54,6 +65,74 @@ func TestParseTarget(t *testing.T) {
 				t.Errorf("unexpected port: \"%s\" != \"%s\"", port, tt.outPort)
 			}
 		})
+	}
+}
+
+func TestIsParseableKnownHostsLine(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := ssh.NewPublicKey(priv.Public().(ed25519.PublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	validKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))
+	fakeMLDSAKey := base64.StdEncoding.EncodeToString([]byte("not a real key blob"))
+
+	tests := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{name: "blank line", line: "", want: true},
+		{name: "comment", line: "# a comment", want: true},
+		{name: "hostname only", line: "example.com", want: true},
+		{name: "valid ed25519 entry", line: "example.com " + validKey, want: true},
+		{name: "unsupported post-quantum key", line: "example.com ssh-mldsa44-ed25519 " + fakeMLDSAKey, want: false},
+		{name: "unsupported key with cert marker", line: "@cert-authority example.com ssh-mldsa44-ed25519 " + fakeMLDSAKey, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isParseableKnownHostsLine(tt.line); got != tt.want {
+				t.Errorf("isParseableKnownHostsLine(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewFilteredKnownHosts(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := ssh.NewPublicKey(priv.Public().(ed25519.PublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	validLine := "example.com " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))
+	mldsaLine := "example.com ssh-mldsa44-ed25519 " + base64.StdEncoding.EncodeToString([]byte("not a real key blob"))
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "known_hosts")
+	content := strings.Join([]string{"# comment", "", mldsaLine, validLine}, "\n") + "\n"
+	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := knownhosts.New(file); err == nil {
+		t.Fatal("expected knownhosts.New to fail on unsupported key algorithm")
+	}
+
+	kh, err := newFilteredKnownHosts([]string{file})
+	if err != nil {
+		t.Fatalf("newFilteredKnownHosts failed: %v", err)
+	}
+
+	algos := kh.HostKeyAlgorithms("example.com:22")
+	if len(algos) != 1 || algos[0] != ssh.KeyAlgoED25519 {
+		t.Errorf("HostKeyAlgorithms = %v, want [%s]", algos, ssh.KeyAlgoED25519)
 	}
 }
 
