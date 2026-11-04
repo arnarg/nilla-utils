@@ -2,10 +2,15 @@ package deploy
 
 import (
 	"context"
+	"errors"
 
 	"github.com/arnarg/nilla-utils/internal/diff"
 	"github.com/arnarg/nilla-utils/internal/exec"
 )
+
+// ErrNoCurrentGeneration is returned by System.CurrentGeneration when the
+// target has no previous generation, e.g. on first activation.
+var ErrNoCurrentGeneration = errors.New("no current generation found")
 
 type Generation struct {
 	Path    string

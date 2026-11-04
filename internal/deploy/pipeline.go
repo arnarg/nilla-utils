@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -145,8 +146,13 @@ func (s *Session) Diff(ctx context.Context, outPath string) error {
 	printSection("Comparing changes")
 
 	current, err := s.System.CurrentGeneration(s.target, s.Plan.Name)
+	if errors.Is(err, ErrNoCurrentGeneration) {
+		log.Infof("No previous generation found, skipping diff")
+		return nil
+	}
 	if err != nil {
-		return fmt.Errorf("failed to resolve current generation: %w", err)
+		log.Warnf("Failed to resolve current generation, skipping diff: %v", err)
+		return nil
 	}
 
 	log.Debugf("Running diff: current=%s, new=%s", current.Path, outPath)

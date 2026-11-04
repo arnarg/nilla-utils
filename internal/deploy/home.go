@@ -35,9 +35,9 @@ func (HomeSystem) CurrentGeneration(executor exec.Executor, name string) (*Gener
 	path, found := generation.CurrentHomeGenerationPath(executor, username)
 	if !found {
 		if executor.IsLocal() {
-			return nil, fmt.Errorf("current Home Manager generation not found")
+			return nil, fmt.Errorf("current Home Manager generation: %w", ErrNoCurrentGeneration)
 		}
-		return nil, fmt.Errorf("current Home Manager generation not found on target for user %s", username)
+		return nil, fmt.Errorf("current Home Manager generation on target for user %s: %w", username, ErrNoCurrentGeneration)
 	}
 	return &Generation{
 		Path:    path,

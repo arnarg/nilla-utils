@@ -1,7 +1,11 @@
 package deploy
 
 import (
+	"context"
+	"fmt"
 	"testing"
+
+	"github.com/arnarg/nilla-utils/internal/exec"
 
 	"github.com/arnarg/nilla-utils/internal/project"
 	"github.com/go-test/deep"
@@ -130,5 +134,19 @@ func TestBuildArgs(t *testing.T) {
 				t.Error(diff)
 			}
 		})
+	}
+}
+
+type noGenerationSystem struct{ HomeSystem }
+
+func (noGenerationSystem) CurrentGeneration(_ exec.Executor, _ string) (*Generation, error) {
+	return nil, fmt.Errorf("wrapped: %w", ErrNoCurrentGeneration)
+}
+
+func TestSession_DiffSkipsWithoutCurrentGeneration(t *testing.T) {
+	s := &Session{Plan: &Plan{SubCmd: Switch}, System: noGenerationSystem{}}
+	// outPath is never read: Diff returns before comparing generations.
+	if err := s.Diff(context.Background(), "/nix/store/abc123-home-manager-generation"); err != nil {
+		t.Fatalf("expected diff to be skipped without error, got: %v", err)
 	}
 }
