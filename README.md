@@ -17,14 +17,17 @@
 - [Table of contents](#table-of-contents)
   - [Quickstart](#quickstart)
   - [NixOS](#nixos)
+  - [nix-darwin](#nix-darwin)
   - [Home Manager](#home-manager)
     - [Home Manager as a NixOS module](#home-manager-as-a-nixos-module)
   - [MicroVM](#microvm)
   - [Nilla cli plugins](#nilla-cli-plugins)
     - [NixOS](#nixos-1)
+    - [nix-darwin](#nix-darwin-1)
     - [Home Manager](#home-manager-1)
     - [Using the CLI Plugins](#using-the-cli-plugins)
       - [NixOS (`nilla os`)](#nixos-nilla-os)
+      - [nix-darwin (`nilla darwin`)](#nix-darwin-nilla-darwin)
       - [Home Manager (`nilla home`)](#home-manager-nilla-home)
       - [MicroVM (`nilla microvm`)](#microvm-nilla-microvm)
   - [Generators](#generators)
@@ -34,6 +37,7 @@
     - [Shells](#shells)
     - [Overlays](#overlays)
     - [NixOS](#nixos-2)
+    - [nix-darwin](#nix-darwin-2)
     - [Home Manager](#home-manager-2)
     - [MicroVM](#microvm-1)
     - [NixOS Modules](#nixos-modules)
@@ -110,6 +114,45 @@ in nilla.create ({config}: {
   };
 })
 ```
+
+## nix-darwin
+
+The nix-darwin module adds support for nix-darwin systems under `systems.darwin`. It needs a `nix-darwin` input whose branch matches your Nixpkgs release: `master` with `nixpkgs-unstable`, or `nix-darwin-YY.MM` with `nixpkgs-YY.MM-darwin`.
+
+```nix
+# nilla.nix
+let
+  pins = import ./npins;
+
+  nilla = import pins.nilla;
+in nilla.create ({config}: {
+  includes = [
+    "${pins.nilla-utils}/modules"
+  ];
+
+  config = {
+    # Pins added with:
+    #   npins add github -b nixpkgs-unstable nixos nixpkgs
+    #   npins add github -b master nix-darwin nix-darwin
+    inputs.nixpkgs.src = pins.nixpkgs;
+    inputs.nix-darwin.src = pins.nix-darwin;
+
+    systems.darwin.mymac = {
+      # Defaults to "aarch64-darwin".
+      system = "aarch64-darwin";
+
+      # Pass args to nix-darwin modules.
+      args.inputs = config.inputs;
+
+      modules = [
+        ./hosts/mymac/configuration.nix
+      ];
+    };
+  };
+})
+```
+
+Modules defined under `modules.darwin` are available to all nix-darwin systems through the `darwinModules` argument.
 
 ## Home Manager
 
@@ -285,6 +328,17 @@ To install the plugins the following can be added to your NixOS or home-manager 
 }
 ```
 
+### nix-darwin
+
+```nix
+{inputs, ...}: {
+  environment.systemPackages = [
+    inputs.nilla-cli.packages.default.result.aarch64-darwin
+    inputs.nilla-utils.packages.default.result.aarch64-darwin
+  ];
+}
+```
+
 ### Home Manager
 
 ```nix
@@ -342,6 +396,31 @@ For managing NixOS systems defined in `systems.nixos`.
     nilla os generations clean --keep 3 # Keeps the last 3 generations
     ```
     Use `nilla os --help` or `nilla os <subcommand> --help` for more details.
+
+#### nix-darwin (`nilla darwin`)
+
+For managing nix-darwin systems defined in `systems.darwin`. It works like `nilla os`, but has no `test` or `boot` commands. Without a system name it uses the Mac's `LocalHostName`, like `darwin-rebuild` does.
+
+*   **Build a configuration:**
+    ```sh
+    nilla darwin build <system_name>
+    ```
+*   **Build and switch to a configuration:**
+    ```sh
+    nilla darwin switch <system_name>
+    # For remote targets:
+    # nilla darwin switch <system_name> --target user@hostname
+    ```
+*   **List available nix-darwin configurations:**
+    ```sh
+    nilla darwin list
+    ```
+*   **Manage generations:**
+    ```sh
+    nilla darwin generations list
+    nilla darwin generations clean --keep 3
+    nilla darwin generations rollback
+    ```
 
 #### Home Manager (`nilla home`)
 
@@ -647,6 +726,25 @@ in nilla.create ({config}: {
     # ...
   };
 })
+```
+
+### nix-darwin
+
+The nix-darwin generator works like the NixOS generator: each sub-directory of `folder` that contains a `configuration.nix` becomes a system under `systems.darwin`, and `networking.hostName` is set to the directory name. Use a different folder than `generators.nixos.folder`, or both generators will pick up the same hosts.
+
+Modules in `generators.darwinModules.folder` (sub-directories with a `default.nix`) are added to `modules.darwin`, the same way as [NixOS Modules](#nixos-modules).
+
+```nix
+# nilla.nix
+{
+  config = {
+    generators.darwin = {
+      folder = ./darwin-hosts;
+      # `args` and `modules` work as in `generators.nixos`.
+    };
+    generators.darwinModules.folder = ./darwin-modules;
+  };
+}
 ```
 
 ### Home Manager
