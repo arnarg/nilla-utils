@@ -21,6 +21,7 @@ buildGoApplication {
 
   subPackages = [
     "cmd/nilla-os"
+    "cmd/nilla-darwin"
     "cmd/nilla-home"
     "cmd/nilla-microvm"
   ];
