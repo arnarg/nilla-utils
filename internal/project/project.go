@@ -247,8 +247,10 @@ func searchUpForNillaNix(path string) (string, error) {
 
 func searchUpForGitDir(path string) (string, error) {
 	for {
-		info, err := os.Stat(filepath.Join(path, ".git"))
-		if err == nil && info.IsDir() {
+		// `.git` is a directory in a regular repository but a file in
+		// worktrees and submodules, so accept either.
+		_, err := os.Stat(filepath.Join(path, ".git"))
+		if err == nil {
 			return path, nil
 		}
 		if !os.IsNotExist(err) {
