@@ -315,13 +315,13 @@ in
     modules.home =
       let
         loader =
-          if config.generators.nixosModules.recursive then
+          if config.generators.homeModules.recursive then
             lib.utils.loadDirsWithFileRecursive
           else
             lib.utils.loadDirsWithFile;
       in
       lib.modules.when (
         config.generators.homeModules.folder != null && pathExists config.generators.homeModules.folder
-      ) (mapAttrs (_name: import) (loader "default.nix" config.generators.homeModules.folder));
+      ) (lib.utils.importTree (loader "default.nix" config.generators.homeModules.folder));
   };
 }

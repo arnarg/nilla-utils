@@ -6,12 +6,19 @@ let
     filter
     foldl'
     hasAttr
+    isAttrs
     listToAttrs
+    mapAttrs
     readDir
     ;
 in
 {
   config.lib.utils = {
+    # Import every path in a (possibly nested) attrset of paths, as
+    # returned by `loadDirsWithFile` or `loadDirsWithFileRecursive`.
+    importTree =
+      tree: mapAttrs (_: v: if isAttrs v then config.lib.utils.importTree v else import v) tree;
+
     loadDirsWithFile =
       file:
       let

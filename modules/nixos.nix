@@ -253,6 +253,6 @@ in
       in
       lib.modules.when (
         config.generators.nixosModules.folder != null && pathExists config.generators.nixosModules.folder
-      ) (mapAttrs (_name: import) (loader "default.nix" config.generators.nixosModules.folder));
+      ) (lib.utils.importTree (loader "default.nix" config.generators.nixosModules.folder));
   };
 }
