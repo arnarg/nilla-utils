@@ -18,6 +18,7 @@
   - [Quickstart](#quickstart)
   - [NixOS](#nixos)
   - [Home Manager](#home-manager)
+    - [Home Manager as a NixOS module](#home-manager-as-a-nixos-module)
   - [MicroVM](#microvm)
   - [Nilla cli plugins](#nilla-cli-plugins)
     - [NixOS](#nixos-1)
@@ -144,6 +145,38 @@ in nilla.create ({config}: {
   };
 })
 ```
+
+### Home Manager as a NixOS module
+
+Instead of a standalone configuration, home-manager users can be built into a NixOS system with `systems.nixos.<name>.home`. The home-manager NixOS module is imported automatically when `home.users` is non-empty, and `homeModules` is passed to the user modules just like in standalone configurations.
+
+```nix
+systems.nixos.mysystem = {
+  modules = [
+    {
+      # home-manager takes the home directory from here.
+      users.users.user.isNormalUser = true;
+      # ...
+    }
+  ];
+
+  home = {
+    # home-manager module per user.
+    users.user = {
+      home.stateVersion = "24.11";
+    };
+
+    # Optional:
+    # args.inputs = config.inputs;        # extraSpecialArgs
+    # modules = [ ];                       # sharedModules for every user
+    # home-manager = config.inputs.hm;     # defaults to inputs.home-manager
+    # useGlobalPkgs = true;                # default
+    # useUserPackages = true;              # default
+  };
+};
+```
+
+The users are then deployed with `nilla os` and do not show up in `nilla home`.
 
 ## MicroVM
 
@@ -679,6 +712,23 @@ in nilla.create ({config}: {
   };
 })
 ```
+
+To build discovered users into the NixOS system of the same host instead, set `generators.home.nixos`. This only applies to hosts that also have a `configuration.nix` in `generators.nixos.folder`. All other users stay standalone `systems.home` configurations.
+
+```nix
+generators.nixos.folder = ./hosts;
+generators.home = {
+  folder = ./hosts;
+
+  nixos = true;                 # every user on a host with a configuration.nix
+  # nixos = [ "system2" ];      # every user on system2
+  # nixos = [ "user@system2" ]; # only user on system2
+};
+```
+
+List entries are `"host"` or `"user@host"` (the same name as the standalone `systems.home` entry). An entry that matches no user on a host with a `configuration.nix` fails with an assertion, so typos don't go unnoticed.
+
+With the structure above and `nixos = true`, `user@system2` becomes part of `systems.nixos.system2`, while `user1@system1` and `user2@system1` stay standalone. See [`examples/os-home`](./examples/os-home).
 
 ### MicroVM
 

@@ -6,6 +6,23 @@ let
   globalModules = config.modules;
 
   nixosModule = import ./nixos-module.nix inputs;
+
+  # Configures the home-manager NixOS module from `systems.nixos.<name>.home`.
+  homeManagerModule =
+    home:
+    { ... }:
+    {
+      home-manager = {
+        inherit (home) useGlobalPkgs useUserPackages;
+        extraSpecialArgs = {
+          homeModules = if globalModules ? "home" then globalModules.home else { };
+        }
+        // home.args;
+        sharedModules = home.modules;
+        users = home.users;
+      };
+
+    };
 in
 {
   includes = [
@@ -47,6 +64,48 @@ in
                 default.value = [ ];
               };
 
+              home = {
+                users = lib.options.create {
+                  description = ''
+                    home-manager configurations to build into this NixOS system,
+                    keyed by username. Each value is a home-manager module.
+                    When non-empty, the home-manager NixOS module is imported.
+                  '';
+                  type = lib.types.attrs.of lib.types.raw;
+                  default.value = { };
+                };
+
+                args = lib.options.create {
+                  description = "Additional arguments to pass to home-manager modules.";
+                  type = lib.types.attrs.any;
+                  default.value = { };
+                };
+
+                modules = lib.options.create {
+                  description = "Modules to include in every home-manager user of this system.";
+                  type = lib.types.list.of lib.types.raw;
+                  default.value = [ ];
+                };
+
+                home-manager = lib.options.create {
+                  description = "The home-manager input to use.";
+                  type = lib.types.raw;
+                  default.value = if inputs ? home-manager then inputs.home-manager else null;
+                };
+
+                useGlobalPkgs = lib.options.create {
+                  description = "Use the NixOS system's pkgs for home-manager (`home-manager.useGlobalPkgs`).";
+                  type = lib.types.bool;
+                  default.value = true;
+                };
+
+                useUserPackages = lib.options.create {
+                  description = "Install user packages to `users.users.<name>.packages` (`home-manager.useUserPackages`).";
+                  type = lib.types.bool;
+                  default.value = true;
+                };
+              };
+
               result = lib.options.create {
                 description = "The created NixOS system.";
                 type = lib.types.raw;
@@ -59,26 +118,32 @@ in
                     nixosModules = if globalModules ? "nixos" then globalModules.nixos else { };
                   }
                   // config.args;
-                  modules = config.modules ++ [
-                    (
-                      { lib, ... }:
-                      {
-                        # Set settings from nixpkgs input as defaults.
-                        nixpkgs = {
-                          overlays = config.nixpkgs.settings.overlays or [ ];
+                  modules =
+                    config.modules
+                    ++ [
+                      (
+                        { lib, ... }:
+                        {
+                          # Set settings from nixpkgs input as defaults.
+                          nixpkgs = {
+                            overlays = config.nixpkgs.settings.overlays or [ ];
 
-                          # Set every leaf in inputs.nixpkgs.settings.configuration
-                          # as default with `mkDefault` so it can be overwritten
-                          # more easily in a module.
-                          config = lib.mapAttrsRecursive (_: lib.mkDefault) (config.nixpkgs.settings.configuration or { });
+                            # Set every leaf in inputs.nixpkgs.settings.configuration
+                            # as default with `mkDefault` so it can be overwritten
+                            # more easily in a module.
+                            config = lib.mapAttrsRecursive (_: lib.mkDefault) (config.nixpkgs.settings.configuration or { });
 
-                          # Higher priority than `mkOptionDefault` but lower than `mkDefault`.
-                          hostPlatform = lib.mkOverride 1400 config.system;
-                        };
-                      }
-                    )
-                    nixosModule
-                  ];
+                            # Higher priority than `mkOptionDefault` but lower than `mkDefault`.
+                            hostPlatform = lib.mkOverride 1400 config.system;
+                          };
+                        }
+                      )
+                      nixosModule
+                    ]
+                    ++ lib.lists.when (config.home.users != { }) [
+                      "${config.home.home-manager.src}/nixos"
+                      (homeManagerModule config.home)
+                    ];
                   modulesLocation = null;
                 };
               };
@@ -141,6 +206,10 @@ in
       ++ (lib.attrs.mapToList (name: value: {
         assertion = !(builtins.isNull value.nixpkgs);
         message = "A Nixpkgs instance is required for the NixOS system \"${name}\", but none was provided and \"inputs.nixpkgs\" does not exist.";
+      }) config.systems.nixos)
+      ++ (lib.attrs.mapToList (name: value: {
+        assertion = value.home.users == { } || !(builtins.isNull value.home.home-manager);
+        message = "The NixOS system \"${name}\" has home-manager users, but no home-manager input was provided and \"inputs.home-manager\" does not exist.";
       }) config.systems.nixos);
 
     # Generate NixOS configurations from `generators.nixos`

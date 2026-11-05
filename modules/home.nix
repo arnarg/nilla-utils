@@ -9,6 +9,84 @@ let
     ;
 
   globalModules = config.modules;
+
+  homeFolder = config.generators.home.folder;
+  nixosFolder = config.generators.nixos.folder;
+
+  homeGeneratorEnabled = homeFolder != null && pathExists homeFolder;
+
+  generatedArgs = {
+    inherit (config) inputs;
+  }
+  // config.generators.home.args;
+
+  # Whether a host's home users should be built into its NixOS system.
+  nixosSelection = config.generators.home.nixos;
+
+  hasNixosConfig =
+    hostname: nixosFolder != null && pathExists "${nixosFolder}/${hostname}/configuration.nix";
+
+  # Whether a list entry ("host" or "user@host") selects a discovered user.
+  entryMatches = u: entry: entry == u.hostname || entry == "${u.username}@${u.hostname}";
+
+  # Whether a discovered user should be built into its host's NixOS system.
+  isNixosUser =
+    u:
+    hasNixosConfig u.hostname
+    && (
+      if builtins.isBool nixosSelection then
+        nixosSelection
+      else
+        builtins.any (entryMatches u) nixosSelection
+    );
+
+  # All discovered users as a list of { hostname, username, configuration }.
+  # From `<folder>/<hostname>/home.nix` and `<folder>/<hostname>/home/<username>.nix`.
+  discoveredUsers =
+    let
+      inherit (builtins)
+        readDir
+        filter
+        attrNames
+        match
+        ;
+
+      hostDirs =
+        let
+          contents = readDir homeFolder;
+        in
+        filter (n: contents.${n} == "directory") (attrNames contents);
+
+      usersInHost =
+        hostname:
+        let
+          dir = "${homeFolder}/${hostname}";
+          contents = readDir dir;
+
+          single = lib.lists.when (contents ? "home.nix" && contents."home.nix" == "regular") [
+            {
+              inherit hostname;
+              username = config.generators.home.username;
+              configuration = import "${dir}/home.nix";
+            }
+          ];
+
+          multi =
+            if contents ? home && contents.home == "directory" then
+              let
+                homeDir = readDir "${dir}/home";
+              in
+              map (n: {
+                inherit hostname;
+                username = lib.strings.removeSuffix ".nix" n;
+                configuration = import "${dir}/home/${n}";
+              }) (filter (n: match ".*\\.nix" n != null && homeDir.${n} == "regular") (attrNames homeDir))
+            else
+              [ ];
+        in
+        single ++ multi;
+    in
+    concatMap usersInHost hostDirs;
 in
 {
   includes = [
@@ -128,6 +206,21 @@ in
         default.value = [ ];
         description = "Default modules to include in all hosts.";
       };
+      nixos = lib.options.create {
+        type = lib.types.either lib.types.bool (lib.types.list.of lib.types.string);
+        default.value = false;
+        description = ''
+          Build discovered home-manager users into the NixOS system of the same
+          host (using the home-manager NixOS module) instead of creating
+          standalone `systems.home` entries.
+
+          `true` selects all users, `false` none. A list selects users by
+          `"host"` (every user on that host) or `"user@host"` (one user).
+
+          Only applies to hosts that also have a `configuration.nix` in
+          `generators.nixos.folder`; other users stay standalone.
+        '';
+      };
     };
 
     generators.homeModules = {
@@ -165,118 +258,58 @@ in
       ++ (lib.attrs.mapToList (name: value: {
         assertion = !(builtins.isNull value.pkgs);
         message = "A Nixpkgs instance is required for the home-manager configuration \"${name}\", but none was provided and \"inputs.nixpkgs\" does not exist.";
-      }) config.systems.home);
+      }) config.systems.home)
+      ++ (lib.lists.when (homeGeneratorEnabled && builtins.isList nixosSelection) (
+        map (entry: {
+          assertion = builtins.any (u: entryMatches u entry && hasNixosConfig u.hostname) discoveredUsers;
+          message = "\"${entry}\" in \"generators.home.nixos\" does not match any discovered home-manager user on a host with a \"configuration.nix\" in \"generators.nixos.folder\".";
+        }) nixosSelection
+      ));
 
-    # Generate home configurations from `generators.home`
-    systems.home =
-      lib.modules.when (config.generators.home.folder != null && pathExists config.generators.home.folder)
-        (
-          let
-            inherit (builtins)
-              readDir
-              hasAttr
-              filter
-              attrNames
-              ;
+    # Generate standalone home configurations from `generators.home`
+    systems.home = lib.modules.when homeGeneratorEnabled (
+      listToAttrs (
+        map (u: {
+          name = "${u.username}@${u.hostname}";
+          value = {
+            args = generatedArgs;
+            modules = [
+              u.configuration
+              (
+                { lib, ... }:
+                {
+                  home.username = lib.mkDefault u.username;
+                  home.homeDirectory = lib.mkDefault "/home/${u.username}";
+                }
+              )
+            ]
+            ++ config.generators.home.modules;
+          };
+        }) (builtins.filter (u: !(isNixosUser u)) discoveredUsers)
+      )
+    );
 
-            loadUsers' =
-              dir:
-              let
-                users' =
-                  let
-                    contents = readDir dir;
-                  in
-                  if (hasAttr "home" contents) && (contents.home == "directory") then
-                    filter (n: (builtins.match ".*\\.nix" n != null) && (readDir "${dir}/home")."${n}" == "regular") (
-                      attrNames (readDir "${dir}/home")
-                    )
-                  else
-                    [ ];
-              in
-              concatMap (
-                n:
-                let
-                  username = lib.strings.removeSuffix ".nix" n;
-                  homeDir = readDir "${dir}/home";
-                  hasConfig = (hasAttr n homeDir) && (homeDir."${n}" == "regular");
-                in
-                if hasConfig then
-                  [
-                    {
-                      username = username;
-                      configuration = import "${dir}/home/${n}";
-                    }
-                  ]
-                else
-                  [ ]
-              ) users';
-
-            loadUsersFromHostDir =
-              dir:
-              let
-                hosts' =
-                  let
-                    contents = readDir dir;
-                  in
-                  filter (n: contents."${n}" == "directory") (attrNames contents);
-              in
-              concatMap (
-                n:
-                let
-                  users = loadUsers' "${dir}/${n}";
-                in
-                if users != [ ] then
-                  [
-                    {
-                      hostname = n;
-                      users = users;
-                    }
-                  ]
-                else
-                  [ ]
-              ) hosts';
-
-            hosts = config.lib.utils.loadHostsFromDir config.generators.home.folder "home.nix";
-            hostsWithUsers = loadUsersFromHostDir config.generators.home.folder;
-
-            genHomeSystem = username: configuration: {
-              args = {
-                inherit (config) inputs;
-              }
-              // config.generators.home.args;
-              modules = [
-                configuration
-                (
-                  { lib, ... }:
-                  {
-                    home.username = lib.mkDefault username;
-                    home.homeDirectory = lib.mkDefault "/home/${username}";
-                  }
-                )
-              ]
-              ++ config.generators.home.modules;
-            };
-          in
-          listToAttrs (
-            (
-              # Generate from `<folder>/<hostname>/home.nix`
-              map (host: {
-                name = "${config.generators.home.username}@${host.hostname}";
-                value = genHomeSystem config.generators.home.username host.configuration;
-              }) hosts
-            )
-            ++ (
-              # Generate from `<folder>/<hostname>/home/<username>.nix`
-              concatMap (
-                host:
-                map (user: {
-                  name = "${user.username}@${host.hostname}";
-                  value = genHomeSystem user.username user.configuration;
-                }) host.users
-              ) hostsWithUsers
-            )
-          )
-        );
+    # Build discovered home users into NixOS systems when `generators.home.nixos` is set
+    systems.nixos = lib.modules.when homeGeneratorEnabled (
+      let
+        nixosUsers = builtins.filter isNixosUser discoveredUsers;
+        hostnames = lib.lists.unique (map (u: u.hostname) nixosUsers);
+      in
+      listToAttrs (
+        map (hostname: {
+          name = hostname;
+          value.home = {
+            args = generatedArgs;
+            users = listToAttrs (
+              map (u: {
+                name = u.username;
+                value.imports = [ u.configuration ] ++ config.generators.home.modules;
+              }) (builtins.filter (u: u.hostname == hostname) nixosUsers)
+            );
+          };
+        }) hostnames
+      )
+    );
 
     # Generate home modules from `generators.homeModules`
     modules.home =
