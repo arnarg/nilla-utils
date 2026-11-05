@@ -1,10 +1,15 @@
 package tui
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"golang.org/x/term"
 )
 
 type confirmModel struct {
@@ -40,6 +45,22 @@ func (m confirmModel) View() tea.View {
 	}
 
 	return tea.NewView(fmt.Sprintf("\n%s [y/n]", m.message))
+}
+
+// RunTypedConfirm asks the user to type expected, for confirming destructive
+// actions where a single keypress is too easy.
+func RunTypedConfirm(msg, expected string) (bool, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return false, errors.New("confirmation requires a terminal, pass --confirm to skip it")
+	}
+
+	fmt.Fprintf(os.Stderr, "\n%s ", msg)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+
+	return strings.TrimSpace(line) == expected, nil
 }
 
 func RunConfirm(msg string) (bool, error) {

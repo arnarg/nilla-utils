@@ -170,6 +170,64 @@ var app = &cli.Command{
 			Action: actionFuncFor(deploy.Switch),
 		},
 
+		// Install
+		{
+			Name:  "install",
+			Usage: "Install NixOS configuration onto a host booted into a NixOS installer",
+			Description: `Install NixOS configuration onto a host booted into a NixOS installer.
+
+The system is built locally, its closure copied straight into the target's
+root mount point and installed with nixos-install. Requires --target, and
+the target must be logged into as root.
+
+No root password is set during install, so the configuration must set one
+or add SSH keys for a user to be able to log in afterwards.
+
+If the system uses disko, choose how disks are prepared with --disk:
+  none     Disks are already partitioned and mounted at the root mount point
+  mount    Mount existing disko filesystems
+  format   Create missing disko partitions and filesystems, then mount them
+           (existing filesystems are kept)
+  destroy  Wipe all disko disks, recreate and mount them
+
+<name>  Name of the NixOS system to install.`,
+			ArgsUsage: "<name>",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:  "disk",
+					Usage: "How to prepare disks with disko: none, mount, format or destroy",
+				},
+				&cli.StringFlag{
+					Name:  "root",
+					Usage: "Mount point on the target to install into (defaults to disko.rootMountPoint when using disko)",
+					Value: "/mnt",
+				},
+				&cli.StringFlag{
+					Name:  "extra-files",
+					Usage: "Directory whose contents are copied into the root mount point before installing, e.g. etc/ssh/ssh_host_ed25519_key",
+				},
+				&cli.BoolFlag{
+					Name:    "substitute-on-destination",
+					Aliases: []string{"s"},
+					Usage:   "Let the target fetch store paths from its substituters instead of copying them",
+				},
+				&cli.BoolFlag{
+					Name:  "no-reboot",
+					Usage: "Leave the target mounted and running the installer when done",
+				},
+				&cli.BoolFlag{
+					Name:  "no-installer-check",
+					Usage: "Skip checking that the target is booted into a NixOS installer",
+				},
+				&cli.BoolFlag{
+					Name:    "confirm",
+					Aliases: []string{"c"},
+					Usage:   "Do not ask for confirmation, including before wiping disks",
+				},
+			},
+			Action: install,
+		},
+
 		// List
 		{
 			Name:        "list",
@@ -227,6 +285,58 @@ func run(ctx context.Context, cmd *cli.Command, sc deploy.Command) error {
 	defer s.Close()
 
 	return s.Run(ctx)
+}
+
+func install(ctx context.Context, cmd *cli.Command) error {
+	util.InitLogger(verboseCount)
+
+	name := cmd.Args().First()
+	if name == "" {
+		return fmt.Errorf("install requires the name of the system to install")
+	}
+	if cmd.String("target") == "" {
+		return fmt.Errorf("install requires --target")
+	}
+	if cmd.String("build-on") != "" || cmd.Bool("build-on-target") {
+		return fmt.Errorf("install does not support remote builds yet")
+	}
+
+	disk, err := deploy.ParseDiskMode(cmd.String("disk"))
+	if err != nil {
+		return err
+	}
+
+	plan, err := deploy.ResolvePlan(deploy.Options{
+		ProjectPath: cmd.String("project"),
+		Name:        name,
+		SubCmd:      deploy.Install,
+		Target:      cmd.String("target"),
+		Raw:         cmd.Bool("raw"),
+		Verbose:     cmd.Bool("verbose"),
+		Compact:     cmd.Bool("compact"),
+		Confirm:     cmd.Bool("confirm"),
+		Notify:      cmd.Bool("notify"),
+		NoDiff:      true,
+	}, deploy.NixOSSystem{})
+	if err != nil {
+		return err
+	}
+
+	s, err := deploy.NewSession(ctx, plan, deploy.NixOSSystem{}, deploy.DefaultDeps())
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	return s.Install(ctx, deploy.InstallOptions{
+		Disk:             disk,
+		Root:             cmd.String("root"),
+		RootSet:          cmd.IsSet("root"),
+		ExtraFiles:       cmd.String("extra-files"),
+		Substitute:       cmd.Bool("substitute-on-destination"),
+		NoReboot:         cmd.Bool("no-reboot"),
+		NoInstallerCheck: cmd.Bool("no-installer-check"),
+	})
 }
 
 func listConfigurations(ctx context.Context, cmd *cli.Command) error {

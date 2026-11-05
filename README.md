@@ -386,6 +386,23 @@ For managing NixOS systems defined in `systems.nixos`.
     ```sh
     nilla os boot <system_name>
     ```
+*   **Install a configuration onto a new host:**
+
+    Boot the host into a NixOS installer and make sure you can SSH into it as root. The system is built locally, copied straight into the target's root mount point and installed with `nixos-install`, then the host is rebooted.
+    ```sh
+    # Partition and mount the disks yourself first (mounted at /mnt):
+    nilla os install <system_name> --target root@hostname
+    # With disko, wipe the disks and recreate them from the configuration:
+    nilla os install <system_name> --target root@hostname --disk destroy
+    # Or just mount existing disko filesystems, e.g. to retry an install:
+    # nilla os install <system_name> --target root@hostname --disk mount
+    # Copy files into the new system, e.g. a pre-generated SSH host key
+    # at ./hosts/foo/files/etc/ssh/ssh_host_ed25519_key:
+    # nilla os install <system_name> --target root@hostname --extra-files ./hosts/foo/files
+    ```
+    When the system imports the disko NixOS module, `--disk` is required and can be `none` (already mounted), `mount` (mount existing filesystems), `format` (create missing partitions and filesystems, keeping existing ones) or `destroy` (wipe and recreate everything). Before formatting or wiping disks you are asked to type the system name to confirm.
+
+    `nixos-install` is run with `--no-root-passwd`, so no root password is set during install. Make sure the configuration sets one (e.g. `users.users.root.hashedPassword`) or adds SSH keys (`users.users.root.openssh.authorizedKeys.keys`), otherwise you will not be able to log in after the reboot.
 *   **List available NixOS configurations:**
     ```sh
     nilla os list

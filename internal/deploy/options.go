@@ -16,6 +16,7 @@ const (
 	Test
 	Boot
 	Switch
+	Install
 )
 
 func (c Command) String() string {
@@ -28,6 +29,8 @@ func (c Command) String() string {
 		return "Boot"
 	case Switch:
 		return "Switch"
+	case Install:
+		return "Install"
 	default:
 		return "Unknown"
 	}
