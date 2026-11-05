@@ -180,6 +180,12 @@ The system is built locally, its closure copied straight into the target's
 root mount point and installed with nixos-install. Requires --target, and
 the target must be logged into as root.
 
+With --build-on the system is built on that host and copied from there. With
+--build-on-target it is built on the target, straight into the root mount
+point, using the binary caches from the system's nix.settings. Unless --disk
+is none, that happens after the disks are prepared, so the confirmation comes
+before the system is built.
+
 No root password is set during install, so the configuration must set one
 or add SSH keys for a user to be able to log in afterwards.
 
@@ -297,9 +303,6 @@ func install(ctx context.Context, cmd *cli.Command) error {
 	if cmd.String("target") == "" {
 		return fmt.Errorf("install requires --target")
 	}
-	if cmd.String("build-on") != "" || cmd.Bool("build-on-target") {
-		return fmt.Errorf("install does not support remote builds yet")
-	}
 
 	disk, err := deploy.ParseDiskMode(cmd.String("disk"))
 	if err != nil {
@@ -311,6 +314,8 @@ func install(ctx context.Context, cmd *cli.Command) error {
 		Name:        name,
 		SubCmd:      deploy.Install,
 		Target:      cmd.String("target"),
+		BuildOn:     cmd.String("build-on"),
+		BuildOnSelf: cmd.Bool("build-on-target"),
 		Raw:         cmd.Bool("raw"),
 		Verbose:     cmd.Bool("verbose"),
 		Compact:     cmd.Bool("compact"),

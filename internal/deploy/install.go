@@ -94,35 +94,120 @@ type diskoInfo struct {
 	Swaps []string `json:"swaps"`
 }
 
-const diskoInfoApply = `r:
-  let c = r.config; in
-  if c ? disko && c.system.build ? diskoScript then {
-    rootMountPoint = c.disko.rootMountPoint;
-    disks = builtins.mapAttrs (_: d: d.device) c.disko.devices.disk;
-    swaps = map (s: s.device) (builtins.filter (s: !s.randomEncryption.enable) c.swapDevices);
-  } else null`
+// installInfo is what the install evaluates from the system up front.
+type installInfo struct {
+	Disko *diskoInfo `json:"disko"`
+	// Substituters and TrustedPublicKeys come from the system's nix.settings.
+	// They are passed on when building on the target, since the installer
+	// only knows about cache.nixos.org.
+	Substituters      []string `json:"substituters"`
+	TrustedPublicKeys []string `json:"trustedPublicKeys"`
+}
 
-func (s *Session) evalDiskoInfo(ctx context.Context) (*diskoInfo, error) {
+const installInfoApply = `r:
+  let c = r.config; in {
+    disko =
+      if c ? disko && c.system.build ? diskoScript then {
+        rootMountPoint = c.disko.rootMountPoint;
+        disks = builtins.mapAttrs (_: d: d.device) c.disko.devices.disk;
+        swaps = map (s: s.device) (builtins.filter (s: !s.randomEncryption.enable) c.swapDevices);
+      } else null;
+    substituters = c.nix.settings.substituters or [ ];
+    trustedPublicKeys = c.nix.settings.trusted-public-keys or [ ];
+  }`
+
+func (s *Session) evalInstallInfo(ctx context.Context) (*installInfo, error) {
 	attr := fmt.Sprintf("systems.nixos.\"%s\".result", s.Plan.Name)
 	out, err := nix.Command("eval").
-		Args([]string{"-f", s.Plan.Source.FullNillaPath(), attr, "--json", "--apply", diskoInfoApply}).
+		Args([]string{"-f", s.Plan.Source.FullNillaPath(), attr, "--json", "--apply", installInfoApply}).
 		Executor(s.local).
 		Run(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to evaluate disko configuration: %w", err)
+		return nil, fmt.Errorf("failed to evaluate system configuration: %w", err)
 	}
-	return parseDiskoInfo(out)
+	return parseInstallInfo(out)
 }
 
-func parseDiskoInfo(out []byte) (*diskoInfo, error) {
-	var info *diskoInfo
+func parseInstallInfo(out []byte) (*installInfo, error) {
+	var info installInfo
 	if err := json.Unmarshal(out, &info); err != nil {
-		return nil, fmt.Errorf("failed to parse disko configuration: %w", err)
+		return nil, fmt.Errorf("failed to parse system configuration: %w", err)
 	}
-	if info != nil && len(info.Disks) == 0 {
-		return nil, nil
+	if info.Disko != nil && len(info.Disko.Disks) == 0 {
+		info.Disko = nil
 	}
-	return info, nil
+	return &info, nil
+}
+
+// buildPlacement is where the system is built.
+type buildPlacement int
+
+const (
+	buildLocal buildPlacement = iota
+	buildOnBuilder
+	buildOnTarget
+)
+
+func resolvePlacement(p *Plan) buildPlacement {
+	switch {
+	case p.BuildTarget == "":
+		return buildLocal
+	case p.BuildTarget == p.DeployTarget:
+		return buildOnTarget
+	default:
+		return buildOnBuilder
+	}
+}
+
+func (b buildPlacement) String() string {
+	switch b {
+	case buildOnBuilder:
+		return "remote builder"
+	case buildOnTarget:
+		return "target"
+	default:
+		return "local"
+	}
+}
+
+// remoteStoreURL is like installStoreURL but for the ssh-ng protocol, which
+// remote builds use.
+func remoteStoreURL(user, host, port, root string) string {
+	return "ssh-ng" + strings.TrimPrefix(installStoreURL(user, host, port, root), "ssh")
+}
+
+// substituterArgs passes the system's binary caches on to a build on the
+// target. These have to be given to nix running on the target: a daemon
+// behind ssh-ng silently ignores substituters sent by the client.
+func substituterArgs(info *installInfo) []string {
+	var args []string
+	if len(info.Substituters) > 0 {
+		args = append(args, "--option", "extra-substituters", strings.Join(info.Substituters, " "))
+	}
+	if len(info.TrustedPublicKeys) > 0 {
+		args = append(args, "--option", "extra-trusted-public-keys", strings.Join(info.TrustedPublicKeys, " "))
+	}
+	return args
+}
+
+// drvPathsApply evaluates the derivation paths of the named attributes of
+// config.system.build in one go, so remote builds evaluate the system once.
+func drvPathsApply(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = fmt.Sprintf("%q", n)
+	}
+	return fmt.Sprintf("b: map (n: b.${n}.drvPath) [ %s ]", strings.Join(quoted, " "))
+}
+
+// outputInstallables turns derivation paths into installables for their
+// default output.
+func outputInstallables(drvs []string) []string {
+	out := make([]string, len(drvs))
+	for i, d := range drvs {
+		out[i] = d + "^out"
+	}
+	return out
 }
 
 // resolveDiskMode picks the disk mode. Without disko nothing but "none" is
@@ -349,11 +434,12 @@ func (s *Session) Install(ctx context.Context, opts InstallOptions) error {
 		}
 	}
 
-	printSection("Evaluating disk configuration")
-	info, err := s.evalDiskoInfo(ctx)
+	printSection("Evaluating system configuration")
+	sysInfo, err := s.evalInstallInfo(ctx)
 	if err != nil {
 		return err
 	}
+	info := sysInfo.Disko
 	mode, err := resolveDiskMode(opts.Disk, info)
 	if err != nil {
 		return err
@@ -362,6 +448,8 @@ func (s *Session) Install(ctx context.Context, opts InstallOptions) error {
 	if err != nil {
 		return err
 	}
+	placement := resolvePlacement(p)
+	user, host, port := util.ParseTarget(p.DeployTarget)
 
 	// Check the target before spending time on a build.
 	printSection("Checking target")
@@ -394,13 +482,53 @@ func (s *Session) Install(ctx context.Context, opts InstallOptions) error {
 		}
 	}
 
-	// Build the system and the disk scripts in one go.
-	toplevel, scripts, err := s.buildInstall(ctx, mode)
-	if err != nil {
-		return err
+	scriptAttrs := diskScriptAttrs(mode)
+
+	// Remote builds evaluate all derivations they need once.
+	var drvs map[string]string
+	if placement != buildLocal {
+		names := append([]string{"toplevel"}, scriptAttrs...)
+		if drvs, err = s.evalDrvPaths(ctx, names); err != nil {
+			return err
+		}
 	}
 
-	s.printInstallSummary(mode, root, opts, disks)
+	// When building on the target, the system is built straight into the
+	// store under root. That only exists after the disks are prepared, so
+	// unless they already are, the system is built after confirming.
+	buildLater := placement == buildOnTarget && mode != DiskNone
+
+	var toplevel string
+	var scripts []string
+	switch placement {
+	case buildLocal:
+		if toplevel, scripts, err = s.buildInstall(ctx, mode); err != nil {
+			return err
+		}
+	case buildOnBuilder:
+		fmt.Fprintln(os.Stderr)
+		printSection(fmt.Sprintf("Building system on %s", p.BuildTarget))
+		paths, err := s.buildRemote(ctx, s.Plan.StoreAddr, pick(drvs, "toplevel", scriptAttrs...)...)
+		if err != nil {
+			return err
+		}
+		toplevel, scripts = paths[0], paths[1:]
+	case buildOnTarget:
+		if len(scriptAttrs) > 0 {
+			fmt.Fprintln(os.Stderr)
+			printSection("Building disk scripts on target")
+			if scripts, err = s.buildOnTarget(ctx, user, host, port, "", substituterArgs(sysInfo), pick(drvs, "", scriptAttrs...)...); err != nil {
+				return err
+			}
+		}
+		if !buildLater {
+			if toplevel, err = s.buildSystemOnTarget(ctx, sysInfo, drvs["toplevel"], user, host, port, root); err != nil {
+				return err
+			}
+		}
+	}
+
+	s.printInstallSummary(mode, root, opts, disks, placement, buildLater)
 
 	if p.Notify && !p.Confirm {
 		beeep.AppName = "nilla-utils"
@@ -411,13 +539,13 @@ func (s *Session) Install(ctx context.Context, opts InstallOptions) error {
 		return err
 	}
 
-	user, host, port := util.ParseTarget(p.DeployTarget)
-
 	if len(scripts) > 0 {
-		fmt.Fprintln(os.Stderr)
-		printSection("Copying disk scripts to target")
-		if err := s.copyTo(ctx, installStoreURL(user, host, port, ""), opts.Substitute, scripts...); err != nil {
-			return fmt.Errorf("failed to copy disk scripts: %w", err)
+		if placement != buildOnTarget {
+			fmt.Fprintln(os.Stderr)
+			printSection("Copying disk scripts to target")
+			if err := s.copyTo(ctx, installStoreURL(user, host, port, ""), opts.Substitute, scripts...); err != nil {
+				return fmt.Errorf("failed to copy disk scripts: %w", err)
+			}
 		}
 
 		fmt.Fprintln(os.Stderr)
@@ -443,10 +571,18 @@ func (s *Session) Install(ctx context.Context, opts InstallOptions) error {
 		}
 	}
 
-	fmt.Fprintln(os.Stderr)
-	printSection(fmt.Sprintf("Copying system to %s on target", root))
-	if err := s.copyTo(ctx, installStoreURL(user, host, port, root), opts.Substitute, toplevel); err != nil {
-		return fmt.Errorf("failed to copy system: %w", err)
+	if buildLater {
+		if toplevel, err = s.buildSystemOnTarget(ctx, sysInfo, drvs["toplevel"], user, host, port, root); err != nil {
+			return err
+		}
+	}
+
+	if placement != buildOnTarget {
+		fmt.Fprintln(os.Stderr)
+		printSection(fmt.Sprintf("Copying system to %s on target", root))
+		if err := s.copyTo(ctx, installStoreURL(user, host, port, root), opts.Substitute, toplevel); err != nil {
+			return fmt.Errorf("failed to copy system: %w", err)
+		}
 	}
 
 	if opts.ExtraFiles != "" {
@@ -508,8 +644,127 @@ func (s *Session) buildInstall(ctx context.Context, mode DiskMode) (string, []st
 	return paths[0], paths[1:], nil
 }
 
+// pick returns the derivation paths for first (if not empty) and rest, in
+// order.
+func pick(drvs map[string]string, first string, rest ...string) []string {
+	var out []string
+	if first != "" {
+		out = append(out, drvs[first])
+	}
+	for _, n := range rest {
+		out = append(out, drvs[n])
+	}
+	return out
+}
+
+func (s *Session) evalDrvPaths(ctx context.Context, names []string) (map[string]string, error) {
+	attr := fmt.Sprintf("systems.nixos.\"%s\".result.config.system.build", s.Plan.Name)
+	out, err := nix.Command("eval").
+		Args([]string{"-f", s.Plan.Source.FullNillaPath(), attr, "--json", "--apply", drvPathsApply(names)}).
+		Executor(s.local).
+		Run(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get derivation paths: %w", err)
+	}
+	var paths []string
+	if err := json.Unmarshal(out, &paths); err != nil {
+		return nil, fmt.Errorf("failed to parse derivation paths: %w", err)
+	}
+	if len(paths) != len(names) {
+		return nil, fmt.Errorf("expected %d derivation paths, got %d", len(names), len(paths))
+	}
+	drvs := make(map[string]string, len(names))
+	for i, n := range names {
+		drvs[n] = paths[i]
+	}
+	return drvs, nil
+}
+
+func (s *Session) askpassExec(id string) exec.Executor {
+	return exec.NewAskpassExec(s.askpassSrv.SocketPath(), s.askpassSrv.Token(), id)
+}
+
+func (s *Session) copyDerivations(ctx context.Context, storeURL string, drvs []string) error {
+	log.Debugf("Copying derivations to %s", storeURL)
+	_, err := nix.Command("copy").
+		Args(append([]string{"--to", storeURL, "--derivation", "-s"}, drvs...)).
+		Executor(s.askpassExec("install-copy-derivation")).
+		Run(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to copy derivations to %s: %w", storeURL, err)
+	}
+	return nil
+}
+
+// buildRemote copies derivations to a builder's store and builds them there,
+// returning their output paths in order.
+func (s *Session) buildRemote(ctx context.Context, storeURL string, drvs ...string) ([]string, error) {
+	if err := s.copyDerivations(ctx, storeURL, drvs); err != nil {
+		return nil, err
+	}
+	args := append([]string{"--store", storeURL, "--no-link"}, outputInstallables(drvs)...)
+	return s.runBuild(ctx, s.askpassExec("install-build"), args, len(drvs))
+}
+
+// buildOnTarget copies derivations to the target and builds them by running
+// nix there, into the store under root, or the installer's own store if root
+// is empty.
+func (s *Session) buildOnTarget(ctx context.Context, user, host, port, root string, extraArgs []string, drvs ...string) ([]string, error) {
+	if err := s.copyDerivations(ctx, remoteStoreURL(user, host, port, root), drvs); err != nil {
+		return nil, err
+	}
+	args := targetBuildArgs(root, extraArgs, drvs)
+	return s.runBuild(ctx, s.target, args, len(drvs))
+}
+
+func targetBuildArgs(root string, extraArgs, drvs []string) []string {
+	var args []string
+	if root != "" {
+		args = append(args, "--store", root)
+	}
+	args = append(args, "--no-link")
+	args = append(args, extraArgs...)
+	return append(args, outputInstallables(drvs)...)
+}
+
+func (s *Session) runBuild(ctx context.Context, ex exec.Executor, args []string, n int) ([]string, error) {
+	p := s.Plan
+	log.Debugf("Nix build arguments: %v", args)
+	cmd := nix.Command("build").Args(args).Executor(ex)
+	if !p.Raw {
+		cmd = cmd.Reporter(tui.NewBuildReporter(tui.ResolveReporterMode(p.Compact, p.Verbose)))
+	}
+	out, err := cmd.Run(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build configuration: %w", err)
+	}
+
+	paths := strings.Fields(string(out))
+	if len(paths) != n {
+		return nil, fmt.Errorf("expected %d build outputs, got %d: %v", n, len(paths), paths)
+	}
+	return paths, nil
+}
+
+// buildSystemOnTarget builds the system straight into the store under root
+// on the target, so it does not have to fit in the installer's memory or be
+// copied again by nixos-install.
+func (s *Session) buildSystemOnTarget(ctx context.Context, info *installInfo, drv, user, host, port, root string) (string, error) {
+	fmt.Fprintln(os.Stderr)
+	printSection(fmt.Sprintf("Building system into %s on target", root))
+	paths, err := s.buildOnTarget(ctx, user, host, port, root, substituterArgs(info), drv)
+	if err != nil {
+		return "", err
+	}
+	return paths[0], nil
+}
+
 func (s *Session) copyTo(ctx context.Context, storeURL string, substitute bool, paths ...string) error {
 	args := []string{"--to", storeURL}
+	if s.Plan.BuildTarget != "" && s.Plan.BuildTarget != s.Plan.DeployTarget {
+		// Built on a separate builder, copy from there.
+		args = append(args, "--from", s.Plan.StoreAddr)
+	}
 	if substitute {
 		args = append(args, "--substitute-on-destination")
 	}
@@ -534,7 +789,7 @@ func (s *Session) copyExtraFiles(ctx context.Context, dir, root string) error {
 	return err
 }
 
-func (s *Session) printInstallSummary(mode DiskMode, root string, opts InstallOptions, disks []diskState) {
+func (s *Session) printInstallSummary(mode DiskMode, root string, opts InstallOptions, disks []diskState, placement buildPlacement, buildLater bool) {
 	fmt.Fprintln(os.Stderr)
 	printSection("Install summary")
 
@@ -546,10 +801,18 @@ func (s *Session) printInstallSummary(mode DiskMode, root string, opts InstallOp
 	if opts.ExtraFiles != "" {
 		extra = opts.ExtraFiles
 	}
+	build := placement.String()
+	if placement == buildOnBuilder {
+		build = s.Plan.BuildTarget
+	}
+	if buildLater {
+		build += " (after preparing disks)"
+	}
 	fmt.Fprintln(os.Stderr, util.RenderTable(
 		[]string{"", ""},
 		[]string{"System", s.Plan.Name},
 		[]string{"Target", s.Plan.DeployTarget},
+		[]string{"Build", build},
 		[]string{"Disks", string(mode)},
 		[]string{"Root", root},
 		[]string{"Extra files", extra},

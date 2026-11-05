@@ -43,29 +43,129 @@ func TestDiskScriptAttrs(t *testing.T) {
 	}
 }
 
-func TestParseDiskoInfo(t *testing.T) {
-	t.Run("null means no disko", func(t *testing.T) {
-		info, err := parseDiskoInfo([]byte("null"))
-		if err != nil || info != nil {
-			t.Errorf("got %v, %v", info, err)
+func TestParseInstallInfo(t *testing.T) {
+	t.Run("no disko", func(t *testing.T) {
+		info, err := parseInstallInfo([]byte(`{"disko":null,"substituters":[],"trustedPublicKeys":[]}`))
+		if err != nil || info.Disko != nil {
+			t.Errorf("got %+v, %v", info, err)
 		}
 	})
 	t.Run("no disks means no disko", func(t *testing.T) {
-		info, err := parseDiskoInfo([]byte(`{"rootMountPoint":"/mnt","disks":{}}`))
-		if err != nil || info != nil {
-			t.Errorf("got %v, %v", info, err)
+		info, err := parseInstallInfo([]byte(`{"disko":{"rootMountPoint":"/mnt","disks":{}}}`))
+		if err != nil || info.Disko != nil {
+			t.Errorf("got %+v, %v", info, err)
 		}
 	})
-	t.Run("disks", func(t *testing.T) {
-		info, err := parseDiskoInfo([]byte(`{"rootMountPoint":"/mnt","disks":{"main":"/dev/vda"},"swaps":["/dev/vda2"]}`))
+	t.Run("disks and caches", func(t *testing.T) {
+		info, err := parseInstallInfo([]byte(`{
+			"disko":{"rootMountPoint":"/mnt","disks":{"main":"/dev/vda"},"swaps":["/dev/vda2"]},
+			"substituters":["https://cache.example"],
+			"trustedPublicKeys":["cache.example:abc="]
+		}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := &diskoInfo{RootMountPoint: "/mnt", Disks: map[string]string{"main": "/dev/vda"}, Swaps: []string{"/dev/vda2"}}
+		want := &installInfo{
+			Disko:             &diskoInfo{RootMountPoint: "/mnt", Disks: map[string]string{"main": "/dev/vda"}, Swaps: []string{"/dev/vda2"}},
+			Substituters:      []string{"https://cache.example"},
+			TrustedPublicKeys: []string{"cache.example:abc="},
+		}
 		if diff := deep.Equal(info, want); diff != nil {
 			t.Error(diff)
 		}
 	})
+}
+
+func TestResolvePlacement(t *testing.T) {
+	tests := []struct {
+		plan *Plan
+		want buildPlacement
+	}{
+		{&Plan{DeployTarget: "root@t"}, buildLocal},
+		{&Plan{DeployTarget: "root@t", BuildTarget: "root@t"}, buildOnTarget},
+		{&Plan{DeployTarget: "root@t", BuildTarget: "me@builder"}, buildOnBuilder},
+	}
+	for _, tt := range tests {
+		if got := resolvePlacement(tt.plan); got != tt.want {
+			t.Errorf("resolvePlacement(%+v) = %v, want %v", tt.plan, got, tt.want)
+		}
+	}
+}
+
+func TestRemoteStoreURL(t *testing.T) {
+	tests := []struct {
+		user, host, port, root string
+		want                   string
+	}{
+		{"root", "h", "", "", "ssh-ng://root@h"},
+		{"", "h", "2222", "", "ssh-ng://h?port=2222"},
+		{"root", "h", "2222", "/mnt", "ssh-ng://root@h?port=2222&remote-store=local%3Froot%3D%2Fmnt"},
+	}
+	for _, tt := range tests {
+		if got := remoteStoreURL(tt.user, tt.host, tt.port, tt.root); got != tt.want {
+			t.Errorf("remoteStoreURL(%q, %q, %q, %q) = %q, want %q", tt.user, tt.host, tt.port, tt.root, got, tt.want)
+		}
+	}
+}
+
+func TestSubstituterArgs(t *testing.T) {
+	if got := substituterArgs(&installInfo{}); got != nil {
+		t.Errorf("expected no args, got %v", got)
+	}
+	got := substituterArgs(&installInfo{
+		Substituters:      []string{"https://a", "https://b"},
+		TrustedPublicKeys: []string{"a:1=", "b:2="},
+	})
+	want := []string{
+		"--option", "extra-substituters", "https://a https://b",
+		"--option", "extra-trusted-public-keys", "a:1= b:2=",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestTargetBuildArgs(t *testing.T) {
+	drvs := []string{"/nix/store/a.drv"}
+	extra := []string{"--option", "extra-substituters", "https://a"}
+
+	got := targetBuildArgs("/mnt", extra, drvs)
+	want := []string{"--store", "/mnt", "--no-link", "--option", "extra-substituters", "https://a", "/nix/store/a.drv^out"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+
+	got = targetBuildArgs("", nil, drvs)
+	want = []string{"--no-link", "/nix/store/a.drv^out"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestDrvPathsApply(t *testing.T) {
+	got := drvPathsApply([]string{"toplevel", "diskoScript"})
+	want := `b: map (n: b.${n}.drvPath) [ "toplevel" "diskoScript" ]`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestOutputInstallables(t *testing.T) {
+	got := outputInstallables([]string{"/nix/store/a.drv", "/nix/store/b.drv"})
+	want := []string{"/nix/store/a.drv^out", "/nix/store/b.drv^out"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestPick(t *testing.T) {
+	drvs := map[string]string{"toplevel": "t.drv", "formatScript": "f.drv", "mountScript": "m.drv"}
+	if got := pick(drvs, "toplevel", "formatScript", "mountScript"); !slices.Equal(got, []string{"t.drv", "f.drv", "m.drv"}) {
+		t.Errorf("got %v", got)
+	}
+	if got := pick(drvs, "", "mountScript"); !slices.Equal(got, []string{"m.drv"}) {
+		t.Errorf("got %v", got)
+	}
 }
 
 func TestResolveDiskMode(t *testing.T) {
