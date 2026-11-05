@@ -37,6 +37,20 @@ func TestResolveCopy(t *testing.T) {
 			},
 		},
 		{
+			name: "targets without a user leave it to ssh_config",
+			plan: &Plan{
+				BuildTarget:  "builder",
+				DeployTarget: "myvm",
+			},
+			want: copyPlan{
+				args: []string{
+					"--to", "ssh://myvm",
+					"--from", "ssh-ng://builder",
+					outPath,
+				},
+			},
+		},
+		{
 			name: "remote build on different host copies from build to deploy",
 			plan: &Plan{
 				BuildTarget:  "builduser@builder",

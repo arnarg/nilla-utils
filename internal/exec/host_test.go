@@ -100,7 +100,7 @@ func TestLocalHost(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h, err := NewHost(context.Background(), "", nil)
+	h, err := NewHost(context.Background(), "")
 	if err != nil {
 		t.Fatalf("NewHost: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestLocalHost(t *testing.T) {
 
 // TestNewHostLocal constructs a local host and asserts it satisfies Host.
 func TestNewHostLocal(t *testing.T) {
-	h, err := NewHost(context.Background(), "", nil)
+	h, err := NewHost(context.Background(), "")
 	if err != nil {
 		t.Fatalf("NewHost: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestNewHostLocal(t *testing.T) {
 // TestLocalHostCommandPassthrough verifies the embedded Executor still runs
 // commands locally.
 func TestLocalHostCommandPassthrough(t *testing.T) {
-	h, err := NewHost(context.Background(), "", nil)
+	h, err := NewHost(context.Background(), "")
 	if err != nil {
 		t.Fatalf("NewHost: %v", err)
 	}

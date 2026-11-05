@@ -5,8 +5,6 @@ import (
 	"errors"
 	"io"
 	osexec "os/exec"
-
-	"golang.org/x/crypto/ssh"
 )
 
 type Executor interface {
@@ -29,15 +27,12 @@ type Command interface {
 }
 
 // ExitCode returns the exit status of a command run locally or over SSH, or -1
-// if the error is not an exit error.
+// if the error is not an exit error. Over SSH, 255 can also mean that ssh
+// itself failed.
 func ExitCode(err error) int {
-	var lexec *osexec.ExitError
-	if errors.As(err, &lexec) {
-		return lexec.ExitCode()
-	}
-	var sexec *ssh.ExitError
-	if errors.As(err, &sexec) {
-		return sexec.ExitStatus()
+	var eerr *osexec.ExitError
+	if errors.As(err, &eerr) {
+		return eerr.ExitCode()
 	}
 	return -1
 }

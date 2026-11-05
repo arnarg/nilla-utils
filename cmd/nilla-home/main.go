@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"charm.land/log/v2"
-	"github.com/arnarg/nilla-utils/internal/askpass"
 	"github.com/arnarg/nilla-utils/internal/deploy"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/project"
@@ -216,22 +215,6 @@ var app = &cli.Command{
 		},
 	},
 	Action: func(ctx context.Context, cmd *cli.Command) error {
-		if socket := os.Getenv("NILLA_ASKPASS_SOCKET"); socket != "" {
-			commandID := os.Getenv("NILLA_ASKPASS_COMMAND_ID")
-			token := os.Getenv("NILLA_ASKPASS_TOKEN")
-			var prompt string
-			if len(os.Args) > 1 {
-				prompt = os.Args[len(os.Args)-1]
-			}
-			host := askpass.ParseHostFromPrompt(prompt)
-			password, err := askpass.GetPassword(socket, host, commandID, token)
-			if err != nil {
-				return err
-			}
-			fmt.Println(password)
-			return nil
-		}
-
 		if cmd.Args().Len() < 1 {
 			cli.ShowAppHelp(cmd)
 		}

@@ -197,14 +197,15 @@ func ParseTarget(target string) (user, hostname, port string) {
 }
 
 // BuildStoreAddress constructs an ssh-ng:// store address from user and hostname.
-// If user is empty, it uses the current local user as default (matching SSH executor behavior).
+// If user is empty, none is added, so ssh applies the User from ssh_config (or
+// the local user) exactly as it does for nilla's own SSH connection.
 // If port is non-empty, it is appended as a ?port= query parameter (supported by both Nix
 // and Lix, unlike the host:port authority syntax which requires Nix >= 2.31).
 func BuildStoreAddress(user, hostname, port string) string {
-	if user == "" {
-		user = GetUser()
+	addr := "ssh-ng://" + hostname
+	if user != "" {
+		addr = fmt.Sprintf("ssh-ng://%s@%s", user, hostname)
 	}
-	addr := fmt.Sprintf("ssh-ng://%s@%s", user, hostname)
 	if port != "" {
 		addr += "?port=" + port
 	}

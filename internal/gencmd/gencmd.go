@@ -59,7 +59,7 @@ type RollbackOptions struct {
 // List prints all generations of sys (on target, or locally when target is
 // empty), marking the current one.
 func List(ctx context.Context, sys generation.System, target string) error {
-	h, err := exec.NewHost(ctx, target, nil)
+	h, err := exec.NewHost(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -103,7 +103,7 @@ func Clean(ctx context.Context, sys generation.System, target string, opts Clean
 		return util.SelfElevate()
 	}
 
-	h, err := exec.NewHost(ctx, target, nil)
+	h, err := exec.NewHost(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -175,7 +175,7 @@ func Rollback(ctx context.Context, sys generation.System, target string, opts Ro
 		return util.SelfElevate()
 	}
 
-	h, err := exec.NewHost(ctx, target, nil)
+	h, err := exec.NewHost(ctx, target)
 	if err != nil {
 		return err
 	}

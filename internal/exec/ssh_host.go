@@ -3,15 +3,12 @@ package exec
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/ssh"
 )
 
 type statFlavor int
@@ -21,18 +18,15 @@ const (
 	statBSD
 )
 
-// sshHost implements Host over an SSH session. The underlying *ssh.Client is
-// owned by the host and torn down by Close.
+// sshHost implements Host over an SSH connection, which it owns and tears
+// down on Close.
 //
-// The remote fs operations are implemented with stat/readlink/cat/rm. The SSH
-// executor joins command arguments with spaces without shell-quoting, so every
-// argument here is kept shell-safe (no spaces or metacharacters). In particular
-// the stat format strings use '_' as a field separator (shell-safe) and output
+// The remote fs operations are implemented with stat/readlink/cat/rm. The
+// stat format strings use '_' as a field separator (shell-safe) and output
 // is parsed positionally: mtime is all digits, the permissions field is exactly
 // 10 characters, so the remainder (the path) may itself contain '_'.
 type sshHost struct {
 	*sshExecutor
-	client *ssh.Client
 	flavor statFlavor
 }
 
@@ -166,7 +160,7 @@ func (h *sshHost) Remove(path string) error {
 }
 
 func (h *sshHost) Close() error {
-	return h.client.Close()
+	return h.sshExecutor.Close()
 }
 
 // parseStatLine parses a single "<mtime>_<perms>_<path>" record emitted by the
@@ -203,9 +197,5 @@ func notExist(path string, err error) error {
 }
 
 func exitCode(err error) int {
-	var eerr *ssh.ExitError
-	if errors.As(err, &eerr) {
-		return eerr.ExitStatus()
-	}
-	return -1
+	return ExitCode(err)
 }

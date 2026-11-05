@@ -61,9 +61,6 @@ schema = 3
   [mod."github.com/jackmordaunt/icns/v3"]
     version = "v3.0.1"
     hash = "sha256-BBS5+lIOPn3HVBr4S15YYgvffQxy24BAOAQml4CJ2s4="
-  [mod."github.com/kevinburke/ssh_config"]
-    version = "v1.6.0"
-    hash = "sha256-i/EYNJx0+HbAGFVoiKV4QF/zqb4fWewh+bpBKUkXDCc="
   [mod."github.com/lucasb-eyer/go-colorful"]
     version = "v1.4.1"
     hash = "sha256-nY4QB5g4wsf/BNjtNBxzAbgE40kHDhYYYQMAQUHic60="
@@ -85,9 +82,6 @@ schema = 3
   [mod."github.com/sergeymakinen/go-ico"]
     version = "v1.0.0"
     hash = "sha256-ljOz3cREtFSoqdVtfPo2tgk25QA90Bfn/iHJYKF9roQ="
-  [mod."github.com/skeema/knownhosts"]
-    version = "v1.3.2"
-    hash = "sha256-fEGeX/V9fC3MVjY34yuL8vn00brqIoTXLAX0x4ecBzg="
   [mod."github.com/sourcegraph/conc"]
     version = "v0.3.0"
     hash = "sha256-mIdMs9MLAOBKf3/0quf1iI3v8uNWydy7ae5MFa+F2Ko="

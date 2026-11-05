@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/arnarg/nilla-utils/internal/askpass"
 	"github.com/arnarg/nilla-utils/internal/exec"
 )
 
 type mockExecutor struct {
 	isLocal bool
+	closed  bool
 }
 
 func (m *mockExecutor) Command(string, ...string) (exec.Command, error) { return nil, nil }
@@ -19,15 +19,37 @@ func (m *mockExecutor) CommandContext(context.Context, string, ...string) (exec.
 }
 func (m *mockExecutor) PathExists(string) (bool, error) { return false, nil }
 func (m *mockExecutor) IsLocal() bool                   { return m.isLocal }
+func (m *mockExecutor) Close() error {
+	m.closed = true
+	return nil
+}
+
+// sshDeps returns deps whose NewSSH hands out the given executors (or an
+// error for targets not in the map) and records the targets it was asked for.
+func sshDeps(local exec.Executor, remotes map[string]exec.Executor, calls *[]string) SessionDeps {
+	return SessionDeps{
+		NewLocal: func() exec.Executor { return local },
+		NewSSH: func(_ context.Context, tgt string) (exec.Executor, error) {
+			*calls = append(*calls, tgt)
+			if e, ok := remotes[tgt]; ok {
+				return e, nil
+			}
+			return nil, fmt.Errorf("SSH failed for %s", tgt)
+		},
+		NixSSHEnv: func() string {
+			if len(*calls) == 0 {
+				return ""
+			}
+			return "NIX_SSHOPTS=-o ControlPath=/tmp/x/%C"
+		},
+	}
+}
 
 func TestNewSession_localOnly(t *testing.T) {
 	local := &mockExecutor{isLocal: true}
-	deps := SessionDeps{
-		NewLocal:   func() exec.Executor { return local },
-		NewAskpass: askpass.NewServer,
-	}
+	var calls []string
 
-	s, err := NewSession(context.Background(), &Plan{SubCmd: Build}, NixOSSystem{}, deps)
+	s, err := NewSession(context.Background(), &Plan{SubCmd: Build}, NixOSSystem{}, sshDeps(local, nil, &calls))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,35 +61,28 @@ func TestNewSession_localOnly(t *testing.T) {
 	if s.forDiff != local {
 		t.Error("forDiff should be local executor")
 	}
-	if s.askpassSrv != nil {
-		t.Error("askpassSrv should be nil for local-only")
+	if len(calls) != 0 {
+		t.Errorf("expected no SSH connections, got %v", calls)
+	}
+	if s.CopyExecutor() != local || s.BuildExecutor() != local {
+		t.Error("nix commands should run with the plain local executor")
 	}
 }
 
 func TestNewSession_withDeployTarget(t *testing.T) {
 	local := &mockExecutor{isLocal: true}
-	target := &mockExecutor{isLocal: false}
-
-	sshCalls := []string{}
-	deps := SessionDeps{
-		NewLocal: func() exec.Executor { return local },
-		NewSSH: func(tgt string, cache *askpass.PasswordCache) (exec.Executor, error) {
-			sshCalls = append(sshCalls, tgt)
-			return target, nil
-		},
-		NewAskpass: askpass.NewServer,
-	}
+	target := &mockExecutor{}
+	var calls []string
 
 	plan := &Plan{
 		SubCmd:       Switch,
 		DeployTarget: "user@deployhost",
 	}
 
-	s, err := NewSession(context.Background(), plan, NixOSSystem{}, deps)
+	s, err := NewSession(context.Background(), plan, NixOSSystem{}, sshDeps(local, map[string]exec.Executor{"user@deployhost": target}, &calls))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
 
 	if s.target != target {
 		t.Error("target should be SSH executor")
@@ -75,24 +90,23 @@ func TestNewSession_withDeployTarget(t *testing.T) {
 	if s.forDiff != local {
 		t.Error("forDiff should be local when built locally and deployed remotely")
 	}
-	if len(sshCalls) != 1 || sshCalls[0] != "user@deployhost" {
-		t.Errorf("expected 1 NewSSH call for user@deployhost, got %v", sshCalls)
+	if len(calls) != 1 || calls[0] != "user@deployhost" {
+		t.Errorf("expected 1 NewSSH call for user@deployhost, got %v", calls)
+	}
+	if s.CopyExecutor() == local {
+		t.Error("copy should run with NIX_SSHOPTS set")
+	}
+
+	s.Close()
+	if !target.closed {
+		t.Error("Close should close the SSH connection")
 	}
 }
 
 func TestNewSession_remoteBuildSameAsDeploy(t *testing.T) {
 	local := &mockExecutor{isLocal: true}
-	target := &mockExecutor{isLocal: false}
-
-	sshCalls := []string{}
-	deps := SessionDeps{
-		NewLocal: func() exec.Executor { return local },
-		NewSSH: func(tgt string, cache *askpass.PasswordCache) (exec.Executor, error) {
-			sshCalls = append(sshCalls, tgt)
-			return target, nil
-		},
-		NewAskpass: askpass.NewServer,
-	}
+	target := &mockExecutor{}
+	var calls []string
 
 	plan := &Plan{
 		SubCmd:       Switch,
@@ -101,7 +115,7 @@ func TestNewSession_remoteBuildSameAsDeploy(t *testing.T) {
 		StoreAddr:    "ssh-ng://user@host",
 	}
 
-	s, err := NewSession(context.Background(), plan, NixOSSystem{}, deps)
+	s, err := NewSession(context.Background(), plan, NixOSSystem{}, sshDeps(local, map[string]exec.Executor{"user@host": target}, &calls))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,29 +127,18 @@ func TestNewSession_remoteBuildSameAsDeploy(t *testing.T) {
 	if s.forDiff != target {
 		t.Error("forDiff should be target when build and deploy are same host")
 	}
-	if len(sshCalls) != 1 {
-		t.Errorf("expected 1 NewSSH call, got %d", len(sshCalls))
+	if len(calls) != 1 {
+		t.Errorf("expected 1 NewSSH call, got %v", calls)
+	}
+	if s.BuildExecutor() == local {
+		t.Error("remote build should run with NIX_SSHOPTS set")
 	}
 }
 
 func TestNewSession_remoteBuildDifferentFromDeploy(t *testing.T) {
-	deployExec := &mockExecutor{isLocal: false}
-	buildExec := &mockExecutor{isLocal: false}
-
-	sshCalls := []string{}
-	sshResults := map[string]exec.Executor{
-		"deployuser@deployhost": deployExec,
-		"builduser@builder":     buildExec,
-	}
-
-	deps := SessionDeps{
-		NewLocal: func() exec.Executor { return &mockExecutor{isLocal: true} },
-		NewSSH: func(tgt string, cache *askpass.PasswordCache) (exec.Executor, error) {
-			sshCalls = append(sshCalls, tgt)
-			return sshResults[tgt], nil
-		},
-		NewAskpass: askpass.NewServer,
-	}
+	deployExec := &mockExecutor{}
+	buildExec := &mockExecutor{}
+	var calls []string
 
 	plan := &Plan{
 		SubCmd:       Switch,
@@ -144,11 +147,13 @@ func TestNewSession_remoteBuildDifferentFromDeploy(t *testing.T) {
 		StoreAddr:    "ssh-ng://builduser@builder",
 	}
 
-	s, err := NewSession(context.Background(), plan, NixOSSystem{}, deps)
+	s, err := NewSession(context.Background(), plan, NixOSSystem{}, sshDeps(&mockExecutor{isLocal: true}, map[string]exec.Executor{
+		"deployuser@deployhost": deployExec,
+		"builduser@builder":     buildExec,
+	}, &calls))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
 
 	if s.target != deployExec {
 		t.Error("target should be deploy executor")
@@ -156,230 +161,92 @@ func TestNewSession_remoteBuildDifferentFromDeploy(t *testing.T) {
 	if s.forDiff != buildExec {
 		t.Error("forDiff should be build executor when build and deploy are different hosts")
 	}
-	if len(sshCalls) != 2 {
-		t.Errorf("expected 2 NewSSH calls, got %d: %v", len(sshCalls), sshCalls)
+	if len(calls) != 2 {
+		t.Errorf("expected 2 NewSSH calls, got %v", calls)
+	}
+
+	s.Close()
+	if !deployExec.closed || !buildExec.closed {
+		t.Error("Close should close both SSH connections")
+	}
+}
+
+// The build host is connected up front even with --no-diff: nix's ssh
+// processes need the shared connection, and prompts must happen before the
+// build starts.
+func TestNewSession_noDiffStillConnectsToBuildHost(t *testing.T) {
+	var calls []string
+	plan := &Plan{
+		SubCmd:       Switch,
+		BuildTarget:  "builduser@builder",
+		DeployTarget: "deployuser@deployhost",
+		StoreAddr:    "ssh-ng://builduser@builder",
+		NoDiff:       true,
+	}
+
+	s, err := NewSession(context.Background(), plan, NixOSSystem{}, sshDeps(&mockExecutor{isLocal: true}, map[string]exec.Executor{
+		"deployuser@deployhost": &mockExecutor{},
+		"builduser@builder":     &mockExecutor{},
+	}, &calls))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if s.forDiff != nil {
+		t.Error("forDiff should be nil when NoDiff is set")
+	}
+	if len(calls) != 2 {
+		t.Errorf("expected connections to both hosts, got %v", calls)
 	}
 }
 
 func TestNewSession_sshError(t *testing.T) {
-	cleanupCalled := false
-
-	deps := SessionDeps{
-		NewLocal: func() exec.Executor { return &mockExecutor{isLocal: true} },
-		NewSSH: func(tgt string, cache *askpass.PasswordCache) (exec.Executor, error) {
-			return nil, fmt.Errorf("SSH failed")
-		},
-		NewAskpass: func(cache *askpass.PasswordCache) (*askpass.Server, func(), error) {
-			srv, cleanup, err := askpass.NewServer(cache)
-			if err != nil {
-				return nil, nil, err
-			}
-			return srv, func() {
-				cleanup()
-				cleanupCalled = true
-			}, nil
-		},
-	}
-
+	var calls []string
 	_, err := NewSession(context.Background(), &Plan{
 		SubCmd:       Switch,
 		DeployTarget: "user@host",
-	}, NixOSSystem{}, deps)
-	if err == nil {
-		t.Fatal("expected error from NewSession")
-	}
-	if !cleanupCalled {
-		t.Error("expected cleanup to be called on SSH failure")
-	}
-}
-
-func TestNewSession_askpassError(t *testing.T) {
-	deps := SessionDeps{
-		NewLocal: func() exec.Executor { return &mockExecutor{isLocal: true} },
-		NewAskpass: func(cache *askpass.PasswordCache) (*askpass.Server, func(), error) {
-			return nil, nil, fmt.Errorf("askpass failed")
-		},
-	}
-
-	_, err := NewSession(context.Background(), &Plan{
-		SubCmd:       Switch,
-		DeployTarget: "user@host",
-	}, NixOSSystem{}, deps)
+	}, NixOSSystem{}, sshDeps(&mockExecutor{isLocal: true}, nil, &calls))
 	if err == nil {
 		t.Fatal("expected error from NewSession")
 	}
 }
 
-func TestNewSession_diffExecutorSSHError(t *testing.T) {
-	deps := SessionDeps{
-		NewLocal: func() exec.Executor { return &mockExecutor{isLocal: true} },
-		NewSSH: func(tgt string, cache *askpass.PasswordCache) (exec.Executor, error) {
-			if tgt == "deployuser@deployhost" {
-				return &mockExecutor{isLocal: false}, nil
-			}
-			return nil, fmt.Errorf("SSH failed for %s", tgt)
-		},
-		NewAskpass: askpass.NewServer,
-	}
+func TestNewSession_buildHostErrorClosesDeployConnection(t *testing.T) {
+	deployExec := &mockExecutor{}
+	var calls []string
 
 	_, err := NewSession(context.Background(), &Plan{
 		SubCmd:       Switch,
 		BuildTarget:  "builduser@builder",
 		DeployTarget: "deployuser@deployhost",
 		StoreAddr:    "ssh-ng://builduser@builder",
-	}, NixOSSystem{}, deps)
+	}, NixOSSystem{}, sshDeps(&mockExecutor{isLocal: true}, map[string]exec.Executor{
+		"deployuser@deployhost": deployExec,
+	}, &calls))
 	if err == nil {
-		t.Fatal("expected error from NewSession when diff executor SSH fails")
+		t.Fatal("expected error when the build host connection fails")
 	}
-}
-
-func TestNewSession_noDiffSkipsDiffExecutor(t *testing.T) {
-	local := &mockExecutor{isLocal: true}
-	target := &mockExecutor{isLocal: false}
-
-	sshCalls := []string{}
-	deps := SessionDeps{
-		NewLocal: func() exec.Executor { return local },
-		NewSSH: func(tgt string, cache *askpass.PasswordCache) (exec.Executor, error) {
-			sshCalls = append(sshCalls, tgt)
-			return target, nil
-		},
-		NewAskpass: askpass.NewServer,
-	}
-
-	plan := &Plan{
-		SubCmd:       Switch,
-		DeployTarget: "user@deployhost",
-		NoDiff:       true,
-	}
-
-	s, err := NewSession(context.Background(), plan, NixOSSystem{}, deps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	if s.forDiff != nil {
-		t.Error("forDiff should be nil when NoDiff is set")
-	}
-	if len(sshCalls) != 1 {
-		t.Errorf("expected 1 NewSSH call (deploy target only), got %d: %v", len(sshCalls), sshCalls)
-	}
-}
-
-func TestNewSession_noDiffAvoidsDiffExecutorSSHError(t *testing.T) {
-	deps := SessionDeps{
-		NewLocal: func() exec.Executor { return &mockExecutor{isLocal: true} },
-		NewSSH: func(tgt string, cache *askpass.PasswordCache) (exec.Executor, error) {
-			if tgt == "deployuser@deployhost" {
-				return &mockExecutor{isLocal: false}, nil
-			}
-			return nil, fmt.Errorf("SSH failed for %s", tgt)
-		},
-		NewAskpass: askpass.NewServer,
-	}
-
-	s, err := NewSession(context.Background(), &Plan{
-		SubCmd:       Switch,
-		BuildTarget:  "builduser@builder",
-		DeployTarget: "deployuser@deployhost",
-		StoreAddr:    "ssh-ng://builduser@builder",
-		NoDiff:       true,
-	}, NixOSSystem{}, deps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	if s.forDiff != nil {
-		t.Error("forDiff should be nil when NoDiff is set")
+	if !deployExec.closed {
+		t.Error("deploy connection should be closed when NewSession fails")
 	}
 }
 
 func TestSession_BuildExecutor(t *testing.T) {
+	local := &mockExecutor{isLocal: true}
+	remote := &mockExecutor{isLocal: true}
+
 	t.Run("local build returns local executor", func(t *testing.T) {
-		local := &mockExecutor{isLocal: true}
-		s := &Session{
-			Plan:  &Plan{},
-			local: local,
-		}
+		s := &Session{Plan: &Plan{}, local: local, nixRemote: remote}
 		if s.BuildExecutor() != local {
 			t.Error("expected local executor for local build")
 		}
 	})
 
-	t.Run("remote build with askpass returns askpass executor", func(t *testing.T) {
-		srv, cleanup, err := askpass.NewServer(askpass.NewPasswordCache())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cleanup()
-
-		local := &mockExecutor{isLocal: true}
-		s := &Session{
-			Plan:       &Plan{StoreAddr: "ssh-ng://user@host"},
-			local:      local,
-			askpassSrv: srv,
-		}
-
-		be := s.BuildExecutor()
-		if be == local {
-			t.Error("expected askpass executor, not local")
-		}
-		if !be.IsLocal() {
-			t.Error("askpass executor should report as local")
-		}
-	})
-
-	t.Run("has askpass but no store addr returns local executor", func(t *testing.T) {
-		srv, cleanup, err := askpass.NewServer(askpass.NewPasswordCache())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cleanup()
-
-		local := &mockExecutor{isLocal: true}
-		s := &Session{
-			Plan:       &Plan{},
-			local:      local,
-			askpassSrv: srv,
-		}
-
-		if s.BuildExecutor() != local {
-			t.Error("expected local executor when store addr is empty")
-		}
-	})
-}
-
-func TestSession_CopyExecutor(t *testing.T) {
-	t.Run("no askpass returns local executor", func(t *testing.T) {
-		local := &mockExecutor{isLocal: true}
-		s := &Session{
-			Plan:  &Plan{},
-			local: local,
-		}
-		if s.CopyExecutor() != local {
-			t.Error("expected local executor when no askpass")
-		}
-	})
-
-	t.Run("has askpass returns askpass executor", func(t *testing.T) {
-		srv, cleanup, err := askpass.NewServer(askpass.NewPasswordCache())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cleanup()
-
-		local := &mockExecutor{isLocal: true}
-		s := &Session{
-			Plan:       &Plan{},
-			local:      local,
-			askpassSrv: srv,
-		}
-
-		ce := s.CopyExecutor()
-		if ce == local {
-			t.Error("expected askpass executor, not local")
+	t.Run("remote build uses the NIX_SSHOPTS executor", func(t *testing.T) {
+		s := &Session{Plan: &Plan{StoreAddr: "ssh-ng://user@host"}, local: local, nixRemote: remote}
+		if s.BuildExecutor() != remote {
+			t.Error("expected NIX_SSHOPTS executor for remote build")
 		}
 	})
 }

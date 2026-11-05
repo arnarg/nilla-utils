@@ -4,8 +4,6 @@ import (
 	"context"
 	"os"
 	"time"
-
-	"github.com/arnarg/nilla-utils/internal/askpass"
 )
 
 // EntryInfo is a minimal, eagerly-fetched description of a filesystem entry.
@@ -30,27 +28,22 @@ type Host interface {
 
 // NewHost returns a Host backed by the local filesystem when target is empty,
 // or an SSH-backed Host connected to target otherwise. For remote targets it
-// owns the *ssh.Client connection (and a fresh password cache when cache is
-// nil). Close tears it down.
-func NewHost(ctx context.Context, target string, cache *askpass.PasswordCache) (Host, error) {
+// owns the SSH connection; Close tears it down.
+func NewHost(ctx context.Context, target string) (Host, error) {
 	if target == "" {
 		return &localHost{Executor: NewLocalExecutor()}, nil
 	}
 
-	if cache == nil {
-		cache = askpass.NewPasswordCache()
-	}
-
-	client, err := dialSSH(target, cache)
+	conn, err := dialSSH(ctx, target)
 	if err != nil {
 		return nil, err
 	}
 
-	h := &sshHost{sshExecutor: &sshExecutor{client: client}, client: client}
+	h := &sshHost{sshExecutor: &sshExecutor{conn: conn}}
 
 	flavor, err := h.detectStatFlavor(ctx)
 	if err != nil {
-		client.Close()
+		conn.Close()
 		return nil, err
 	}
 	h.flavor = flavor

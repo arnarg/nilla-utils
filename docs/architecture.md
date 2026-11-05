@@ -88,12 +88,12 @@ The CLI plugins are built using Go and leverage several internal packages for th
 *   **Abstraction**: An `Executor` interface defines how commands are run (Doc 25).
 *   **Local Execution (`internal/exec/local.go`, Doc 26)**:
     *   A `localExecutor` uses Go's standard `os/exec` package.
-*   **SSH Execution (`internal/exec/ssh.go`, Doc 27)**:
-    *   A `sshExecutor` allows commands to be run on remote hosts.
-    *   Parses SSH targets (e.g., `user@host:port`).
-    *   Uses `~/.ssh/config` for host configurations (port, user, identity files).
-    *   Supports agent forwarding and private key authentication.
-    *   Handles PTY allocation for `sudo` commands if stdin is a terminal.
+*   **SSH Execution (`internal/exec/ssh*.go`, Doc 27)**:
+    *   Remote hosts are reached with the OpenSSH client (`ssh`), so `~/.ssh/config`, known_hosts, agents, ProxyJump, etc. behave exactly as for `nix copy` and remote builds.
+    *   For each host, one shared master connection (`ssh -fNM`, ControlMaster) is opened up front, before builds or progress UI start, so OpenSSH does any prompting (passwords, passphrases, unknown host keys) on the terminal (`ssh_conn.go`).
+    *   Remote commands run as `ssh` processes on that connection (`ssh.go`). nix's own ssh processes reuse it through `NIX_SSHOPTS` (ControlPath, `ControlMaster=no`, `BatchMode=yes`), so nothing logs in or prompts twice.
+    *   A "keeper" session (`cat` on the remote, fed by a pipe only nilla holds) keeps the master alive while nilla runs; if nilla exits, even by crashing, the master shuts down after a short ControlPersist.
+    *   Allocates a remote tty (`ssh -tt`) for `sudo` commands when stdin is a terminal.
 
 #### 3.1.5. System Generation Management (`internal/generation`)
 
@@ -179,8 +179,7 @@ These modules are the declarative backbone, defining how Nilla understands and m
 *   **Key Go Libraries** (from `go.mod`, Doc 4):
     *   `github.com/urfave/cli/v3`: CLI framework.
     *   `github.com/charmbracelet/*` (bubbletea, bubbles, lipgloss, log): TUI and logging.
-    *   `golang.org/x/crypto/ssh`: SSH client implementation.
-    *   `github.com/kevinburke/ssh_config`, `github.com/skeema/knownhosts`: SSH configuration parsing.
+    *   OpenSSH (`ssh`, runtime): all SSH connections. `golang.org/x/crypto/ssh` is only used by tests, as an in-process SSH server.
 
 ## 6. Directory Structure Highlights
 

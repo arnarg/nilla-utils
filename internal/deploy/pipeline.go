@@ -9,7 +9,6 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/diff"
-	"github.com/arnarg/nilla-utils/internal/exec"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/tui"
 	"github.com/arnarg/nilla-utils/internal/util"
@@ -70,11 +69,14 @@ func buildSSHURL(target, port string) string {
 	return buildSSHURLFromParts(user, hostname, port)
 }
 
+// buildSSHURLFromParts builds an ssh:// store URL. Without an explicit user
+// none is added, so ssh applies the User from ssh_config just as it did for
+// nilla's own connection (whose control socket nix must find).
 func buildSSHURLFromParts(user, hostname, port string) string {
-	if user == "" {
-		user = util.GetUser()
+	addr := "ssh://" + hostname
+	if user != "" {
+		addr = fmt.Sprintf("ssh://%s@%s", user, hostname)
 	}
-	addr := fmt.Sprintf("ssh://%s@%s", user, hostname)
 	if port != "" {
 		addr += "?port=" + port
 	}
@@ -127,7 +129,7 @@ func (s *Session) prepareRemoteBuild(ctx context.Context) error {
 	drvPath := strings.TrimSpace(string(evalOut))
 	_, err = nix.Command("copy").
 		Args([]string{"--to", p.StoreAddr, "--derivation", "-s", drvPath}).
-		Executor(exec.NewAskpassExec(s.askpassSrv.SocketPath(), s.askpassSrv.Token(), "copy-derivation")).
+		Executor(s.nixRemoteExecutor()).
 		Run(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to copy derivation to remote: %w", err)

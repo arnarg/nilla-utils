@@ -1,73 +1,39 @@
 package exec
 
 import (
-	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
-	"path/filepath"
+	osexec "os/exec"
 	"regexp"
 	"strings"
-	"sync"
+	"syscall"
+	"time"
 
 	"charm.land/log/v2"
-	"github.com/arnarg/nilla-utils/internal/askpass"
-	"github.com/arnarg/nilla-utils/internal/util"
-	"github.com/kevinburke/ssh_config"
-	"github.com/muesli/cancelreader"
-	"github.com/skeema/knownhosts"
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/term"
 )
 
-const (
-	sshAuthSock       = "SSH_AUTH_SOCK"
-	defaultKnownHosts = "~/.ssh/known_hosts"
-)
-
+// sshExecutor runs commands on a remote host over a shared OpenSSH
+// connection. Close releases the connection.
 type sshExecutor struct {
-	client *ssh.Client
+	conn *sshConn
 }
 
-func dialSSH(target string, cache *askpass.PasswordCache) (*ssh.Client, error) {
-	// Get config from target
-	host, conf, err := configFromTarget(target, cache)
+// NewSSHExecutor connects to target. The returned executor implements
+// io.Closer; close it when done to shut the connection down.
+func NewSSHExecutor(ctx context.Context, target string) (Executor, error) {
+	conn, err := dialSSH(ctx, target)
 	if err != nil {
 		return nil, err
 	}
-
-	if util.IsSSHDebugEnabled() {
-		log.Debugf("Connecting to %s@%s", conf.User, host)
-	}
-
-	// Connect to host
-	client, err := ssh.Dial("tcp", host, conf)
-	if err != nil {
-		// Enhance error message with more context
-		if strings.Contains(err.Error(), "unable to authenticate") {
-			return nil, fmt.Errorf("SSH authentication failed for %s@%s: %v\n\nPossible causes:\n  - SSH keys are not in the server's authorized_keys file for user %s\n  - Keys are encrypted and require a passphrase (not supported)\n  - Server only accepts specific key types\n\nRun with -v to see which keys were attempted", conf.User, host, err, conf.User)
-		}
-		return nil, err
-	}
-
-	if util.IsSSHDebugEnabled() {
-		log.Debugf("Successfully connected to %s@%s", conf.User, host)
-	}
-
-	return client, nil
+	return &sshExecutor{conn: conn}, nil
 }
 
-func NewSSHExecutor(target string, cache *askpass.PasswordCache) (Executor, error) {
-	client, err := dialSSH(target, cache)
-	if err != nil {
-		return nil, err
-	}
-	return &sshExecutor{client}, nil
+func (e *sshExecutor) Close() error {
+	return e.conn.Close()
 }
 
 func (e *sshExecutor) Command(cmd string, args ...string) (Command, error) {
@@ -75,24 +41,34 @@ func (e *sshExecutor) Command(cmd string, args ...string) (Command, error) {
 }
 
 func (e *sshExecutor) CommandContext(ctx context.Context, cmd string, args ...string) (Command, error) {
-	// Try to start a new session
-	sess, err := e.client.NewSession()
-	if err != nil {
-		return nil, err
-	}
+	remote := buildRemoteCmd(cmd, args)
+	log.Debugf("Running on %s: %s", e.conn.target, remote)
 
-	return &sshCommand{sess: sess, cmd: cmd, args: args, fd: -1, ctx: ctx}, nil
+	c := osexec.CommandContext(ctx, sshBinary)
+	// On cancellation, ask ssh to exit rather than killing it, so it can
+	// restore the terminal and close the session cleanly. A remote command
+	// with a tty then gets SIGHUP; one without stops when it next writes
+	// output (OpenSSH's client cannot send signals).
+	c.Cancel = func() error { return c.Process.Signal(syscall.SIGTERM) }
+	c.WaitDelay = 5 * time.Second
+
+	return &sshCommand{
+		Cmd:    c,
+		conn:   e.conn,
+		remote: remote,
+		sudo:   cmd == "sudo",
+	}, nil
 }
 
 func (e *sshExecutor) PathExists(path string) (bool, error) {
-	cmd, err := e.Command("ls", path)
+	cmd, err := e.Command("test", "-e", path)
 	if err != nil {
 		return false, err
 	}
 
 	if err := cmd.Run(); err != nil {
-		if eerr, ok := err.(*ssh.ExitError); ok {
-			return eerr.ExitStatus() != 0, nil
+		if ExitCode(err) == 1 {
+			return false, nil
 		}
 		return false, err
 	}
@@ -127,142 +103,57 @@ func buildRemoteCmd(cmd string, args []string) string {
 	return strings.Join(parts, " ")
 }
 
+// sshCommand is a local `ssh` process running one remote command.
 type sshCommand struct {
-	sess *ssh.Session
-	cmd  string
-	args []string
-
-	fd      int
-	state   *term.State
-	cancelR cancelreader.CancelReader
-	ctx     context.Context
+	*osexec.Cmd
+	conn   *sshConn
+	remote string
+	sudo   bool
 }
 
-func (c *sshCommand) SetStdin(r io.Reader) {
-	c.sess.Stdin = r
-}
+func (c *sshCommand) SetStdin(r io.Reader)  { c.Cmd.Stdin = r }
+func (c *sshCommand) SetStdout(w io.Writer) { c.Cmd.Stdout = w }
+func (c *sshCommand) SetStderr(w io.Writer) { c.Cmd.Stderr = w }
 
-func (c *sshCommand) SetStdout(w io.Writer) {
-	c.sess.Stdout = w
-}
+func (c *sshCommand) StdoutPipe() (io.Reader, error) { return c.Cmd.StdoutPipe() }
+func (c *sshCommand) StderrPipe() (io.Reader, error) { return c.Cmd.StderrPipe() }
 
-func (c *sshCommand) SetStderr(w io.Writer) {
-	c.sess.Stderr = w
-}
-
-func (c *sshCommand) StdinPipe() (io.WriteCloser, error) {
-	return c.sess.StdinPipe()
-}
-
-func (c *sshCommand) StdoutPipe() (io.Reader, error) {
-	return c.sess.StdoutPipe()
-}
-
-func (c *sshCommand) StderrPipe() (io.Reader, error) {
-	return c.sess.StderrPipe()
-}
-
-func (c *sshCommand) Run() error {
-	defer c.cleanup()
-	if err := c.Start(); err != nil {
-		return err
+// wantsTTY reports whether to allocate a remote tty: for sudo when our
+// stdin is a terminal, so sudo can prompt for the password and Ctrl-C
+// reaches the remote command.
+func (c *sshCommand) wantsTTY() bool {
+	if !c.sudo {
+		return false
 	}
-
-	return c.Wait()
+	f, ok := c.Cmd.Stdin.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
 }
 
 func (c *sshCommand) Start() error {
-	// Build command string
-	cmd := buildRemoteCmd(c.cmd, c.args)
-
-	// If we're running sudo, we should request a pty
-	if c.cmd == "sudo" && c.sess.Stdin != nil {
-		// Set up terminal modes
-		modes := ssh.TerminalModes{
-			ssh.ECHO:          0,     // disable echoing
-			ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
-			ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
-		}
-
-		// Request pseudo terminal
-		if f, ok := c.sess.Stdin.(*os.File); ok {
-			fd := int(f.Fd())
-			if term.IsTerminal(fd) {
-				cr, err := cancelreader.NewReader(f)
-				if err != nil {
-					return err
-				}
-				c.cancelR = cr
-				c.sess.Stdin = cr
-
-				state, err := term.MakeRaw(fd)
-				if err != nil {
-					return err
-				}
-				c.state = state
-				c.fd = fd
-
-				termWidth, termHeight, err := term.GetSize(fd)
-				if err != nil {
-					return err
-				}
-
-				err = c.sess.RequestPty("xterm-256color", termHeight, termWidth, modes)
-				if err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	// Start command
-	return c.sess.Start(cmd)
+	c.Cmd.Args = append([]string{sshBinary}, c.conn.commandArgs(c.remote, c.wantsTTY())...)
+	return c.Cmd.Start()
 }
 
 func (c *sshCommand) Wait() error {
-	defer c.sess.Close()
-	defer c.cleanup()
-
-	var wg sync.WaitGroup
-
-	lctx, cancel := context.WithCancel(context.Background())
-
-	wg.Go(func() {
-		select {
-		// Global context cancelled
-		case <-c.ctx.Done():
-			// Send sigint to session
-			if err := c.sess.Signal(ssh.SIGINT); err != nil {
-				fmt.Println(err)
-			}
-
-		// Local context cancelled
-		case <-lctx.Done():
-		}
-	})
-
-	// Wait for session command
-	err := c.sess.Wait()
-
-	// Cancel local context
-	cancel()
-
-	// Wait for goroutine
-	wg.Wait()
-
-	return err
+	return c.wrapErr(c.Cmd.Wait())
 }
 
-func (c *sshCommand) cleanup() {
-	if c.cancelR != nil {
-		c.cancelR.Cancel()
-		c.cancelR.Close()
-		c.cancelR = nil
+func (c *sshCommand) Run() error {
+	if err := c.Start(); err != nil {
+		return err
 	}
-	if c.state != nil {
-		term.Restore(c.fd, c.state)
-		c.state = nil
+	return c.Wait()
+}
+
+// wrapErr explains exit status 255, which ssh uses for its own failures,
+// when the shared connection has gone away. The original error stays
+// wrapped so ExitCode still works.
+func (c *sshCommand) wrapErr(err error) error {
+	var eerr *osexec.ExitError
+	if errors.As(err, &eerr) && eerr.ExitCode() == 255 && c.conn.lost() {
+		return fmt.Errorf("lost SSH connection to %s: %w", c.conn.target, err)
 	}
+	return err
 }
 
 func parseTarget(target string) (user string, host string, port string) {
@@ -277,6 +168,16 @@ func parseTarget(target string) (user string, host string, port string) {
 		host = parts[0]
 	}
 
+	// IPv6 addresses are written as [addr] or [addr]:port
+	if strings.HasPrefix(host, "[") {
+		if end := strings.Index(host, "]"); end > 0 {
+			addr, rest := host[1:end], host[end+1:]
+			host = addr
+			port = strings.TrimPrefix(rest, ":")
+			return
+		}
+	}
+
 	// Check if port is specified
 	parts = strings.SplitN(host, ":", 2)
 
@@ -287,357 +188,4 @@ func parseTarget(target string) (user string, host string, port string) {
 	}
 
 	return
-}
-
-func configFromTarget(target string, cache *askpass.PasswordCache) (string, *ssh.ClientConfig, error) {
-	// Get user and host
-	user, host, port := parseTarget(target)
-
-	// Set port, if not specified
-	if port == "" {
-		port = ssh_config.Get(host, "Port")
-		// Still not set
-		if port == "" {
-			port = ssh_config.Default("Port")
-		}
-	}
-
-	// Build config from host
-	config, err := buildDefaultConfig(host, port)
-	if err != nil {
-		return "", nil, err
-	}
-
-	// Override if specified
-	if user != "" {
-		config.User = user
-	}
-
-	// If user is still unset, we use current user
-	if config.User == "" {
-		config.User = util.GetUser()
-	}
-
-	// Add password callback
-	isTerminal := term.IsTerminal(int(os.Stdin.Fd()))
-	if isTerminal {
-		hostKey := fmt.Sprintf("%s@%s", config.User, host)
-		config.Auth = append(
-			config.Auth,
-			ssh.PasswordCallback(func() (string, error) {
-				if pw, ok := cache.Get(hostKey); ok {
-					return pw, nil
-				}
-				fmt.Fprintf(os.Stderr, "%s's password: ", hostKey)
-				password, err := term.ReadPassword(int(os.Stdin.Fd()))
-				if err != nil {
-					return "", err
-				}
-				fmt.Fprintln(os.Stderr)
-				cache.Set(hostKey, string(password))
-				return string(password), nil
-			}),
-		)
-	}
-
-	// Validate that we have at least one authentication method
-	// Pre-check if public keys are available when password auth is not available
-	if !isTerminal && len(config.Auth) == 1 {
-		// Only have public key auth and no terminal, check if keys are actually available
-		settings := ssh_config.DefaultUserSettings
-		identitiesOnly := false
-		if ionly := settings.Get(host, "IdentitiesOnly"); ionly == "yes" {
-			identitiesOnly = true
-		}
-		identityFiles := getIdentityFiles(settings, host)
-		agentPath := getAgentPath(settings, host)
-
-		// Try to load keys to see if any are available
-		keys := []ssh.Signer{}
-		if !identitiesOnly {
-			agentKeys, err := loadAgentKeys(agentPath)
-			if err == nil && agentKeys != nil {
-				keys = append(keys, agentKeys...)
-			}
-		}
-		for _, path := range identityFiles {
-			key, err := loadPrivateKeyFromFS(path)
-			if err == nil && key != nil {
-				keys = append(keys, key)
-			}
-		}
-
-		if len(keys) == 0 {
-			return "", nil, fmt.Errorf("no SSH keys found for %s@%s (checked SSH agent and identity files) and password authentication is not available in non-terminal context. Please ensure SSH keys are available or run in a terminal", config.User, host)
-		}
-	}
-
-	return fmt.Sprintf("%s:%s", host, port), config, nil
-}
-
-func buildDefaultConfig(host, port string) (*ssh.ClientConfig, error) {
-	// SSH config file parser
-	settings := ssh_config.DefaultUserSettings
-
-	// Initial config
-	conf := &ssh.ClientConfig{
-		User: settings.Get(host, "User"),
-		Auth: []ssh.AuthMethod{},
-	}
-
-	// Check IdentitiesOnly
-	identitiesOnly := false
-	if ionly := settings.Get(host, "IdentitiesOnly"); ionly == "yes" {
-		identitiesOnly = true
-	}
-
-	// Get IdentityFiles
-	identityFiles := getIdentityFiles(settings, host)
-
-	// Get agent path
-	agentPath := getAgentPath(settings, host)
-
-	// Make pubkey callback
-	conf.Auth = append(
-		conf.Auth,
-		ssh.PublicKeysCallback(
-			newPublicKeysCallback(identitiesOnly, agentPath, identityFiles),
-		),
-	)
-
-	// Get known hosts file
-	knownHostsFiles := getKnownHostsFiles(settings, host)
-	kh, err := knownhosts.New(knownHostsFiles...)
-	if err != nil {
-		// OpenSSH 10.6+ writes post-quantum host keys (e.g. ssh-mldsa44-ed25519)
-		// that x/crypto/ssh cannot parse yet. OpenSSH itself ignores such lines,
-		// so retry without them instead of failing every connection.
-		log.Warnf("Ignoring unsupported known_hosts entries: %v", err)
-		kh, err = newFilteredKnownHosts(knownHostsFiles)
-		if err != nil {
-			return nil, err
-		}
-	}
-	conf.HostKeyCallback = kh.HostKeyCallback()
-	conf.HostKeyAlgorithms = kh.HostKeyAlgorithms(fmt.Sprintf("%s:%s", host, port))
-
-	return conf, nil
-}
-
-func getKnownHostsFiles(settings *ssh_config.UserSettings, host string) []string {
-
-	if f, err := settings.GetStrict(host, "UserKnownHostsFile"); err == nil {
-		files := []string{}
-
-		for _, khf := range strings.Split(f, " ") {
-			resolved := resolvePath(khf)
-
-			if _, err := os.Stat(resolved); err == nil {
-				files = append(files, resolved)
-			}
-		}
-
-		return files
-	}
-
-	return []string{resolvePath(defaultKnownHosts)}
-}
-
-func newFilteredKnownHosts(files []string) (knownhosts.HostKeyCallback, error) {
-	dir, err := os.MkdirTemp("", "nilla-knownhosts-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
-
-	filtered := make([]string, 0, len(files))
-	for _, file := range files {
-		f, err := filterKnownHostsFile(file, dir)
-		if err != nil {
-			return nil, err
-		}
-		filtered = append(filtered, f)
-	}
-
-	return knownhosts.New(filtered...)
-}
-
-func filterKnownHostsFile(path, dir string) (string, error) {
-	in, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer in.Close()
-
-	out, err := os.CreateTemp(dir, "known_hosts-")
-	if err != nil {
-		return "", err
-	}
-
-	writer := bufio.NewWriter(out)
-	scanner := bufio.NewScanner(in)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if isParseableKnownHostsLine(line) {
-			if _, err := writer.WriteString(line + "\n"); err != nil {
-				out.Close()
-				return "", err
-			}
-		} else {
-			log.Debugf("Skipping unsupported known_hosts entry in %s", path)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		out.Close()
-		return "", err
-	}
-	if err := writer.Flush(); err != nil {
-		out.Close()
-		return "", err
-	}
-
-	return out.Name(), out.Close()
-}
-
-func isParseableKnownHostsLine(line string) bool {
-	fields := strings.Fields(strings.TrimSpace(line))
-	if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
-		return true
-	}
-	if strings.HasPrefix(fields[0], "@") {
-		fields = fields[1:]
-	}
-	if len(fields) < 3 {
-		return true
-	}
-	blob, err := base64.StdEncoding.DecodeString(fields[2])
-	if err != nil {
-		return true
-	}
-	_, err = ssh.ParsePublicKey(blob)
-	return err == nil
-}
-
-func resolvePath(p string) string {
-	if strings.HasPrefix(p, "~/") {
-		p = filepath.Join(util.GetHomeDir(), p[2:])
-	}
-
-	return os.ExpandEnv(p)
-}
-
-func configPath(p string) string {
-	return fmt.Sprintf("%s/.ssh/%s", util.GetHomeDir(), p)
-}
-
-func getIdentityFiles(settings *ssh_config.UserSettings, host string) []string {
-	files := []string{}
-
-	configFiles := settings.GetAll(host, "IdentityFile")
-	for _, f := range configFiles {
-		resolved := resolvePath(f)
-		files = append(files, resolved)
-	}
-
-	// Default paths to check
-	defaultFiles := []string{
-		configPath("id_dsa"),
-		configPath("id_ecdsa"),
-		configPath("id_ecdsa_sk"),
-		configPath("id_ed25519"),
-		configPath("id_ed25519_sk"),
-		configPath("id_xmsshost"),
-		configPath("id_rsa"),
-	}
-	files = append(files, defaultFiles...)
-
-	return files
-}
-
-func getAgentPath(settings *ssh_config.UserSettings, host string) string {
-	identityAgent := settings.Get(host, "IdentityAgent")
-	if identityAgent != "" && identityAgent != sshAuthSock {
-		return resolvePath(identityAgent)
-	}
-	if identityAgent == "none" {
-		return ""
-	}
-
-	return os.Getenv(sshAuthSock)
-}
-
-func loadAgentKeys(agentPath string) ([]ssh.Signer, error) {
-	if agentPath == "" {
-		return nil, nil
-	}
-
-	conn, err := net.Dial("unix", agentPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	signers, err := agent.NewClient(conn).Signers()
-	if err != nil {
-		return nil, err
-	}
-	o := []ssh.Signer{}
-	for _, s := range signers {
-		// Test if key can sign (some agents require user interaction)
-		_, err := s.Sign(rand.Reader, []byte(""))
-		// Include the key anyway - the sign test might be too strict for some agents
-		// The SSH library will handle authentication failures gracefully
-		o = append(o, s)
-		if err != nil && util.IsSSHDebugEnabled() {
-			log.Debugf("SSH agent: key type %s failed sign test but will try during auth", s.PublicKey().Type())
-		}
-	}
-	return o, nil
-}
-
-func loadPrivateKeyFromFS(path string) (ssh.Signer, error) {
-	privateKey, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	signer, err := ssh.ParsePrivateKey(privateKey)
-	if err != nil {
-		// Check if it's an encrypted key
-		if _, ok := err.(*ssh.PassphraseMissingError); ok {
-			return nil, fmt.Errorf("encrypted key %s requires passphrase (not supported)", path)
-		}
-		return nil, err
-	}
-	return signer, nil
-}
-
-func newPublicKeysCallback(identitiesOnly bool, agentPath string, identityFiles []string) func() ([]ssh.Signer, error) {
-	return func() ([]ssh.Signer, error) {
-		keys := []ssh.Signer{}
-		keyTypes := []string{}
-		if !identitiesOnly {
-			agentKeys, err := loadAgentKeys(agentPath)
-			if err == nil && agentKeys != nil {
-				keys = append(keys, agentKeys...)
-				for _, k := range agentKeys {
-					keyTypes = append(keyTypes, k.PublicKey().Type())
-				}
-			}
-		}
-		for _, path := range identityFiles {
-			key, err := loadPrivateKeyFromFS(path)
-			if err == nil && key != nil {
-				keys = append(keys, key)
-				keyTypes = append(keyTypes, key.PublicKey().Type())
-			}
-		}
-		if len(keys) > 0 && util.IsSSHDebugEnabled() {
-			log.Debugf("SSH authentication: %d key(s) available (types: %s)", len(keys), strings.Join(keyTypes, ", "))
-		}
-		return keys, nil
-	}
 }

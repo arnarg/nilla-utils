@@ -1,7 +1,6 @@
 package util
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -207,10 +206,10 @@ func TestBuildStoreAddress(t *testing.T) {
 			expectedOutput: "ssh-ng://user@hostname",
 		},
 		{
-			name:           "empty user defaults to current user",
+			name:           "empty user is left to ssh_config",
 			user:           "",
 			hostname:       "hostname",
-			expectedOutput: fmt.Sprintf("ssh-ng://%s@hostname", GetUser()),
+			expectedOutput: "ssh-ng://hostname",
 		},
 		{
 			name:           "root user",
@@ -228,7 +227,7 @@ func TestBuildStoreAddress(t *testing.T) {
 			name:           "empty user with domain",
 			user:           "",
 			hostname:       "hostname.example.com",
-			expectedOutput: fmt.Sprintf("ssh-ng://%s@hostname.example.com", GetUser()),
+			expectedOutput: "ssh-ng://hostname.example.com",
 		},
 		{
 			name:           "hostname with port",
@@ -242,7 +241,7 @@ func TestBuildStoreAddress(t *testing.T) {
 			user:           "",
 			hostname:       "hostname",
 			port:           "2222",
-			expectedOutput: fmt.Sprintf("ssh-ng://%s@hostname?port=2222", GetUser()),
+			expectedOutput: "ssh-ng://hostname?port=2222",
 		},
 	}
 
