@@ -49,6 +49,10 @@ var app = &cli.Command{
 			Usage:       "Print version",
 			HideDefault: true,
 			Local:       true,
+			Action: func(ctx context.Context, cmd *cli.Command, _ bool) error {
+				cli.ShowVersion(cmd)
+				return cli.Exit("", 0)
+			},
 		},
 		&cli.BoolFlag{
 			Name:        "verbose",
@@ -160,15 +164,6 @@ var app = &cli.Command{
 			Description: "List MicroVMs in project",
 			Action:      listMicroVMs,
 		},
-	},
-	Action: func(ctx context.Context, cmd *cli.Command) error {
-		if cmd.Args().Len() < 1 {
-			cli.ShowAppHelp(cmd)
-		}
-		if cmd.Bool("version") {
-			cli.ShowVersion(cmd)
-		}
-		return nil
 	},
 }
 

@@ -41,6 +41,10 @@ var app = &cli.Command{
 			Usage:       "Print version",
 			HideDefault: true,
 			Local:       true,
+			Action: func(ctx context.Context, cmd *cli.Command, _ bool) error {
+				cli.ShowVersion(cmd)
+				return cli.Exit("", 0)
+			},
 		},
 		&cli.BoolFlag{
 			Name:        "verbose",
@@ -245,15 +249,6 @@ If the system uses disko, choose how disks are prepared with --disk:
 
 		// Generations
 		gencmd.Command(generation.NixOSSystem{}, "NixOS", &verboseCount),
-	},
-	Action: func(ctx context.Context, cmd *cli.Command) error {
-		if cmd.Args().Len() < 1 {
-			cli.ShowAppHelp(cmd)
-		}
-		if cmd.Bool("version") {
-			cli.ShowVersion(cmd)
-		}
-		return nil
 	},
 }
 
