@@ -2,34 +2,47 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/arnarg/nilla-utils/internal/diff"
 	"github.com/arnarg/nilla-utils/internal/exec"
+	"github.com/arnarg/nilla-utils/internal/generation"
 )
 
 type DarwinSystem struct{}
 
 // ResolveName defaults to the host's LocalHostName, matching darwin-rebuild.
-// When scutil is unavailable (e.g. deploying from Linux) it falls back to the
-// hostname with any ".local" suffix removed.
+// nix-darwin sets LocalHostName from networking.hostName, so after the first
+// activation this matches the generated system name. Outside macOS there is
+// no meaningful default (the local hostname is never a darwin system), so an
+// explicit name is required.
 func (DarwinSystem) ResolveName(name string, _ string) (string, error) {
 	if name != "" {
 		return name, nil
 	}
-	if out, err := osexec.Command("scutil", "--get", "LocalHostName").Output(); err == nil {
-		if n := strings.TrimSpace(string(out)); n != "" {
-			return n, nil
-		}
+	return resolveLocalHostName(runtime.GOOS, func() ([]byte, error) {
+		return osexec.Command("scutil", "--get", "LocalHostName").Output()
+	})
+}
+
+func resolveLocalHostName(goos string, scutil func() ([]byte, error)) (string, error) {
+	if goos != "darwin" {
+		return "", errors.New("a nix-darwin system name is required when not running on macOS")
 	}
-	h, err := os.Hostname()
+	out, err := scutil()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read LocalHostName with scutil, pass a system name instead: %w", err)
 	}
-	return strings.TrimSuffix(h, ".local"), nil
+	n := strings.TrimSpace(string(out))
+	if n == "" {
+		return "", errors.New("LocalHostName is not set, pass a system name instead")
+	}
+	return n, nil
 }
 
 func (DarwinSystem) AttrPath(name string) string {
@@ -62,17 +75,13 @@ func (DarwinSystem) Activate(ctx context.Context, target exec.Executor, outPath 
 	return c.Run()
 }
 
-// darwinActivatePath makes nix-env findable under sudo and in non-interactive
-// SSH sessions, where the Nix profile is often missing from PATH on macOS.
-const darwinActivatePath = `export PATH="$PATH:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin"`
-
 // darwinActivateArgs mirrors `darwin-rebuild switch`: point the system profile
 // at the new toplevel and run its activate script as root. Both run in a
 // single privileged shell so that only one sudo password prompt is needed.
 func darwinActivateArgs(outPath string) []string {
 	script := fmt.Sprintf(
 		"%s; nix-env -p %q --set %q && exec %q",
-		darwinActivatePath, systemProfile, outPath, outPath+"/activate",
+		generation.DarwinPathExport, systemProfile, outPath, outPath+"/activate",
 	)
 	return []string{"sudo", "/bin/sh", "-c", script}
 }

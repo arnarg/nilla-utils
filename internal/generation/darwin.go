@@ -13,13 +13,14 @@ import (
 	"github.com/arnarg/nilla-utils/internal/exec"
 )
 
-// darwinPath makes nix-env findable under sudo and in non-interactive SSH
-// sessions, where the Nix profile is often missing from PATH on macOS.
-const darwinPath = `export PATH="$PATH:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin"`
+// DarwinPathExport makes Nix binaries findable under sudo and in
+// non-interactive SSH sessions, where the Nix profile is often missing from
+// PATH on macOS. Prefix any shell script that calls nix or nix-env with it.
+const DarwinPathExport = `export PATH="$PATH:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin"`
 
 // DarwinSystem implements System for nix-darwin generations. They use the same
-// profile layout as NixOS (/nix/var/nix/profiles/system-N-link), so deletion
-// and garbage collection are shared with NixOSSystem.
+// profile layout as NixOS (/nix/var/nix/profiles/system-N-link), so listing
+// and deletion are shared with NixOSSystem.
 type DarwinSystem struct{}
 
 func (DarwinSystem) RequiresLocalRoot() bool { return true }
@@ -37,75 +38,53 @@ func (DarwinSystem) Row(g Generation) []string {
 }
 
 func (DarwinSystem) Current(h exec.Host) (Generation, error) {
-	res, err := h.Readlink(nixosCurrentLink)
-	if err != nil {
-		return Generation{}, err
-	}
-	ei, err := h.Lstat(filepath.Join(nixosProfilesDir, res))
-	if err != nil {
-		return Generation{}, err
-	}
-	return buildDarwinGeneration(h, nixosProfilesDir, ei)
+	return currentSystemGeneration(h, buildDarwinGeneration)
 }
 
 func (DarwinSystem) List(h exec.Host) ([]Generation, error) {
-	entries, err := h.ReadDir(nixosProfilesDir)
-	if err != nil {
-		return nil, err
-	}
-
-	var gens []Generation
-	for _, e := range entries {
-		if !e.IsSymlink || !nixosGenListRe.MatchString(e.Name) {
-			continue
-		}
-		g, err := buildDarwinGeneration(h, nixosProfilesDir, e)
-		if err != nil {
-			return nil, err
-		}
-		gens = append(gens, g)
-	}
-	return gens, nil
+	return listSystemGenerations(h, buildDarwinGeneration)
 }
 
 func (DarwinSystem) DeleteGenerations(h exec.Host, gens []Generation) error {
 	return NixOSSystem{}.DeleteGenerations(h, gens)
 }
 
+// CollectGarbage runs nix store gc through a shell with DarwinPathExport, as
+// nix is often not on PATH under sudo on macOS.
 func (DarwinSystem) CollectGarbage(ctx context.Context, h exec.Host) error {
-	return NixOSSystem{}.CollectGarbage(ctx, h)
+	args := darwinShellArgs(h, fmt.Sprintf("%s; exec nix store gc -v", DarwinPathExport))
+	return runGC(ctx, h, args[0], args[1:]...)
 }
 
 // Rollback mirrors `darwin-rebuild --rollback`: switch the system profile to
 // the chosen generation and run its activate script as root, in one shell.
 func (DarwinSystem) Rollback(ctx context.Context, h exec.Host, gen Generation) error {
-	args := darwinRollbackArgs(gen)
-	if !h.IsLocal() {
-		args = append([]string{"sudo"}, args...)
-	}
+	script := fmt.Sprintf(
+		"%s; nix-env -p %q --switch-generation %d && exec %q",
+		DarwinPathExport, nixosCurrentLink, gen.ID, filepath.Join(gen.path, "activate"),
+	)
+	args := darwinShellArgs(h, script)
 	return runCmd(ctx, h, args[0], args[1:]...)
 }
 
-func darwinRollbackArgs(gen Generation) []string {
-	script := fmt.Sprintf(
-		"%s; nix-env -p %q --switch-generation %d && exec %q",
-		darwinPath, nixosCurrentLink, gen.ID, filepath.Join(gen.path, "activate"),
-	)
-	return []string{"/bin/sh", "-c", script}
+// darwinShellArgs wraps script in /bin/sh -c, under sudo on remote hosts.
+// Local commands already run as root after SelfElevate.
+func darwinShellArgs(h exec.Host, script string) []string {
+	args := []string{"/bin/sh", "-c", script}
+	if !h.IsLocal() {
+		args = append([]string{"sudo"}, args...)
+	}
+	return args
 }
 
 func buildDarwinGeneration(h exec.Host, root string, e exec.EntryInfo) (Generation, error) {
-	m := nixosGenIDRe.FindStringSubmatch(e.Name)
-	if m == nil {
-		return Generation{}, fmt.Errorf("generation path '%s' does not match pattern", e.Name)
-	}
-	id, err := strconv.Atoi(m[1])
+	id, path, err := parseSystemGenLink(root, e)
 	if err != nil {
 		return Generation{}, err
 	}
 
-	path := filepath.Join(root, e.Name)
-
+	// nix-darwin writes darwin-version into every generation; older or
+	// hand-built profiles may lack it.
 	version := "Unknown"
 	verBytes, err := h.ReadFile(filepath.Join(path, "darwin-version"))
 	if err == nil {

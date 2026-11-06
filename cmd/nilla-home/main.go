@@ -7,6 +7,8 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/deploy"
+	"github.com/arnarg/nilla-utils/internal/gencmd"
+	"github.com/arnarg/nilla-utils/internal/generation"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/project"
 	"github.com/arnarg/nilla-utils/internal/util"
@@ -138,81 +140,7 @@ var app = &cli.Command{
 		},
 
 		// Generations
-		{
-			Name:        "generations",
-			Aliases:     []string{"gen"},
-			Usage:       "Work with home-manager generations",
-			Description: "Work with home-manager generations",
-			Commands: []*cli.Command{
-				// List
-				{
-					Name:        "list",
-					Aliases:     []string{"ls"},
-					Usage:       "List home-manager generations",
-					Description: "List home-manager generations",
-					Action:      listGenerations,
-				},
-
-				// Clean
-				{
-					Name:        "clean",
-					Aliases:     []string{"c"},
-					Usage:       "Delete and garbage collect NixOS generations",
-					Description: "Delete and garbage collect NixOS generations",
-					Flags: []cli.Flag{
-						&cli.UintFlag{
-							Name:    "keep",
-							Aliases: []string{"k"},
-							Usage:   "Number of generations to keep",
-							Value:   1,
-						},
-						&cli.BoolFlag{
-							Name:    "confirm",
-							Aliases: []string{"c"},
-							Usage:   "Do not ask for confirmation",
-						},
-						&cli.IntFlag{
-							Name:  "from",
-							Usage: "Lowest generation number to delete",
-						},
-						&cli.IntFlag{
-							Name:  "to",
-							Usage: "Highest generation number to delete",
-						},
-						&cli.BoolFlag{
-							Name:  "skip-gc",
-							Usage: "Skip garbage collection",
-						},
-					},
-					Action: cleanGenerations,
-				},
-
-				// Rollback
-				{
-					Name:        "rollback",
-					Aliases:     []string{"rb"},
-					Usage:       "Roll back to a previous generation",
-					Description: "Roll back to a previous generation. Defaults to the previous generation if no ID is given.",
-					ArgsUsage:   "[ID]",
-					Flags: []cli.Flag{
-						&cli.BoolFlag{
-							Name:    "confirm",
-							Aliases: []string{"c"},
-							Usage:   "Do not ask for confirmation",
-						},
-						&cli.BoolFlag{
-							Name:  "cleanup",
-							Usage: "Clean up newer generations after rollback",
-						},
-						&cli.BoolFlag{
-							Name:  "skip-gc",
-							Usage: "Skip garbage collection",
-						},
-					},
-					Action: rollbackGenerations,
-				},
-			},
-		},
+		gencmd.Command(generation.HomeSystem{}, "home-manager", &verboseCount),
 	},
 	Action: func(ctx context.Context, cmd *cli.Command) error {
 		if cmd.Args().Len() < 1 {

@@ -202,6 +202,6 @@ in
       in
       lib.modules.when (
         config.generators.darwinModules.folder != null && pathExists config.generators.darwinModules.folder
-      ) (mapAttrs (_name: import) (loader "default.nix" config.generators.darwinModules.folder));
+      ) (lib.utils.importTree (loader "default.nix" config.generators.darwinModules.folder));
   };
 }

@@ -1,9 +1,11 @@
 package deploy
 
 import (
+	"errors"
 	"fmt"
-	"strings"
 	"testing"
+
+	"github.com/arnarg/nilla-utils/internal/generation"
 )
 
 func TestDarwinSystem_AttrPath(t *testing.T) {
@@ -25,13 +27,50 @@ func TestDarwinSystem_ResolveName(t *testing.T) {
 		}
 	})
 
-	t.Run("empty name resolves without .local suffix", func(t *testing.T) {
-		name, err := DarwinSystem{}.ResolveName("", "/some/path")
+}
+
+func TestResolveLocalHostName(t *testing.T) {
+	ok := func() ([]byte, error) { return []byte("mymac\n"), nil }
+
+	t.Run("uses scutil on darwin", func(t *testing.T) {
+		name, err := resolveLocalHostName("darwin", ok)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if name == "" || strings.HasSuffix(name, ".local") {
-			t.Errorf("got %q, want a non-empty name without .local", name)
+		if name != "mymac" {
+			t.Errorf("got %q, want %q", name, "mymac")
+		}
+	})
+
+	t.Run("requires a name outside darwin", func(t *testing.T) {
+		called := false
+		_, err := resolveLocalHostName("linux", func() ([]byte, error) {
+			called = true
+			return ok()
+		})
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if called {
+			t.Error("scutil should not run outside darwin")
+		}
+	})
+
+	t.Run("errors on scutil failure", func(t *testing.T) {
+		_, err := resolveLocalHostName("darwin", func() ([]byte, error) {
+			return nil, errors.New("boom")
+		})
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+
+	t.Run("errors on empty LocalHostName", func(t *testing.T) {
+		_, err := resolveLocalHostName("darwin", func() ([]byte, error) {
+			return []byte("  \n"), nil
+		})
+		if err == nil {
+			t.Fatal("expected an error")
 		}
 	})
 }
@@ -45,7 +84,7 @@ func TestDarwinActivateArgs(t *testing.T) {
 	}
 	want := fmt.Sprintf(
 		"%s; nix-env -p %q --set %q && exec %q",
-		darwinActivatePath, systemProfile, out, out+"/activate",
+		generation.DarwinPathExport, systemProfile, out, out+"/activate",
 	)
 	if got[3] != want {
 		t.Errorf("script = %q, want %q", got[3], want)

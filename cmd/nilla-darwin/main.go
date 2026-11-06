@@ -6,8 +6,9 @@ import (
 	"os"
 
 	"charm.land/log/v2"
-	"github.com/arnarg/nilla-utils/internal/askpass"
 	"github.com/arnarg/nilla-utils/internal/deploy"
+	"github.com/arnarg/nilla-utils/internal/gencmd"
+	"github.com/arnarg/nilla-utils/internal/generation"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/project"
 	"github.com/arnarg/nilla-utils/internal/util"
@@ -139,101 +140,9 @@ var app = &cli.Command{
 		},
 
 		// Generations
-		{
-			Name:        "generations",
-			Aliases:     []string{"gen"},
-			Usage:       "Work with nix-darwin generations",
-			Description: "Work with nix-darwin generations",
-			Commands: []*cli.Command{
-				// List
-				{
-					Name:        "list",
-					Aliases:     []string{"ls"},
-					Usage:       "List nix-darwin generations",
-					Description: "List nix-darwin generations",
-					Action:      listGenerations,
-				},
-
-				// Clean
-				{
-					Name:        "clean",
-					Aliases:     []string{"c"},
-					Usage:       "Delete and garbage collect nix-darwin generations",
-					Description: "Delete and garbage collect nix-darwin generations",
-					Flags: []cli.Flag{
-						&cli.UintFlag{
-							Name:    "keep",
-							Aliases: []string{"k"},
-							Usage:   "Number of generations to keep",
-							Value:   1,
-						},
-						&cli.BoolFlag{
-							Name:    "confirm",
-							Aliases: []string{"c"},
-							Usage:   "Do not ask for confirmation",
-						},
-						&cli.IntFlag{
-							Name:  "from",
-							Usage: "Lowest generation number to delete",
-						},
-						&cli.IntFlag{
-							Name:  "to",
-							Usage: "Highest generation number to delete",
-						},
-						&cli.BoolFlag{
-							Name:  "skip-gc",
-							Usage: "Skip garbage collection",
-						},
-					},
-					Action: cleanGenerations,
-				},
-
-				// Rollback
-				{
-					Name:        "rollback",
-					Aliases:     []string{"rb"},
-					Usage:       "Roll back to a previous generation",
-					Description: "Roll back to a previous generation. Defaults to the previous generation if no ID is given.",
-					ArgsUsage:   "[ID]",
-					Flags: []cli.Flag{
-						&cli.BoolFlag{
-							Name:    "confirm",
-							Aliases: []string{"c"},
-							Usage:   "Do not ask for confirmation",
-						},
-						&cli.BoolFlag{
-							Name:  "cleanup",
-							Usage: "Clean up newer generations after rollback",
-						},
-						&cli.BoolFlag{
-							Name:  "skip-gc",
-							Usage: "Skip garbage collection",
-						},
-					},
-					Action: rollbackGenerations,
-				},
-			},
-		},
+		gencmd.Command(generation.DarwinSystem{}, "nix-darwin", &verboseCount),
 	},
 	Action: func(ctx context.Context, cmd *cli.Command) error {
-		// Askpass mode, invoked by ssh as SSH_ASKPASS
-		if socket := os.Getenv("NILLA_ASKPASS_SOCKET"); socket != "" {
-			commandID := os.Getenv("NILLA_ASKPASS_COMMAND_ID")
-			token := os.Getenv("NILLA_ASKPASS_TOKEN")
-			// os.Args is ["nilla-darwin", "user@host's password: "] when invoked as SSH_ASKPASS
-			var prompt string
-			if len(os.Args) > 1 {
-				prompt = os.Args[len(os.Args)-1]
-			}
-			host := askpass.ParseHostFromPrompt(prompt)
-			password, err := askpass.GetPassword(socket, host, commandID, token)
-			if err != nil {
-				return err
-			}
-			fmt.Println(password)
-			return nil
-		}
-
 		if cmd.Args().Len() < 1 {
 			cli.ShowAppHelp(cmd)
 		}

@@ -66,7 +66,7 @@ func TestDarwinSystem_Rollback(t *testing.T) {
 	gen := Generation{ID: 3, path: nixosProfilesDir + "/system-3-link"}
 	wantScript := fmt.Sprintf(
 		"%s; nix-env -p %q --switch-generation 3 && exec %q",
-		darwinPath, nixosCurrentLink, gen.path+"/activate",
+		DarwinPathExport, nixosCurrentLink, gen.path+"/activate",
 	)
 
 	t.Run("local runs without sudo", func(t *testing.T) {
@@ -87,6 +87,32 @@ func TestDarwinSystem_Rollback(t *testing.T) {
 		}
 		if len(h.ranCmds) != 1 || !strings.HasPrefix(h.ranCmds[0], "sudo /bin/sh -c ") {
 			t.Errorf("ran %v, want one sudo /bin/sh -c command", h.ranCmds)
+		}
+	})
+}
+
+func TestDarwinSystem_CollectGarbage(t *testing.T) {
+	wantScript := DarwinPathExport + "; exec nix store gc -v"
+
+	t.Run("local runs a shell with the darwin PATH", func(t *testing.T) {
+		h := newFakeHost(true)
+		if err := (DarwinSystem{}).CollectGarbage(context.Background(), h); err != nil {
+			t.Fatalf("CollectGarbage: %v", err)
+		}
+		want := "/bin/sh -c " + wantScript
+		if len(h.ranCmds) != 1 || h.ranCmds[0] != want {
+			t.Errorf("ran %v, want [%s]", h.ranCmds, want)
+		}
+	})
+
+	t.Run("remote runs the shell under sudo", func(t *testing.T) {
+		h := newFakeHost(false)
+		if err := (DarwinSystem{}).CollectGarbage(context.Background(), h); err != nil {
+			t.Fatalf("CollectGarbage: %v", err)
+		}
+		want := "sudo /bin/sh -c " + wantScript
+		if len(h.ranCmds) != 1 || h.ranCmds[0] != want {
+			t.Errorf("ran %v, want [%s]", h.ranCmds, want)
 		}
 	})
 }

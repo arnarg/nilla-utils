@@ -43,21 +43,36 @@ func (NixOSSystem) Row(g Generation) []string {
 }
 
 func (NixOSSystem) Current(h exec.Host) (Generation, error) {
-	// The main system profile (/nix/var/nix/profiles/system) is a symlink to
-	// the current generation link (e.g. system-5-link).
+	return currentSystemGeneration(h, buildNixOSGeneration)
+}
+
+func (NixOSSystem) List(h exec.Host) ([]Generation, error) {
+	return listSystemGenerations(h, buildNixOSGeneration)
+}
+
+// systemGenBuilder builds a Generation from a system-N-link entry in the
+// system profiles directory.
+type systemGenBuilder func(h exec.Host, root string, e exec.EntryInfo) (Generation, error)
+
+// currentSystemGeneration resolves the generation the system profile points
+// to. The main system profile (/nix/var/nix/profiles/system) is a symlink to
+// the current generation link (e.g. system-5-link). NixOS and nix-darwin share
+// this layout.
+func currentSystemGeneration(h exec.Host, build systemGenBuilder) (Generation, error) {
 	res, err := h.Readlink(nixosCurrentLink)
 	if err != nil {
 		return Generation{}, err
 	}
-	absp := filepath.Join(nixosProfilesDir, res)
-	ei, err := h.Lstat(absp)
+	ei, err := h.Lstat(filepath.Join(nixosProfilesDir, res))
 	if err != nil {
 		return Generation{}, err
 	}
-	return buildNixOSGeneration(h, nixosProfilesDir, ei)
+	return build(h, nixosProfilesDir, ei)
 }
 
-func (NixOSSystem) List(h exec.Host) ([]Generation, error) {
+// listSystemGenerations lists every system-N-link in the system profiles
+// directory.
+func listSystemGenerations(h exec.Host, build systemGenBuilder) ([]Generation, error) {
 	entries, err := h.ReadDir(nixosProfilesDir)
 	if err != nil {
 		return nil, err
@@ -68,13 +83,27 @@ func (NixOSSystem) List(h exec.Host) ([]Generation, error) {
 		if !e.IsSymlink || !nixosGenListRe.MatchString(e.Name) {
 			continue
 		}
-		g, err := buildNixOSGeneration(h, nixosProfilesDir, e)
+		g, err := build(h, nixosProfilesDir, e)
 		if err != nil {
 			return nil, err
 		}
 		gens = append(gens, g)
 	}
 	return gens, nil
+}
+
+// parseSystemGenLink extracts the generation ID and full path from a
+// system-N-link entry.
+func parseSystemGenLink(root string, e exec.EntryInfo) (int, string, error) {
+	m := nixosGenIDRe.FindStringSubmatch(e.Name)
+	if m == nil {
+		return 0, "", fmt.Errorf("generation path '%s' does not match pattern", e.Name)
+	}
+	id, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, "", err
+	}
+	return id, filepath.Join(root, e.Name), nil
 }
 
 func (NixOSSystem) DeleteGenerations(h exec.Host, gens []Generation) error {
@@ -132,16 +161,10 @@ func (NixOSSystem) CollectGarbage(ctx context.Context, h exec.Host) error {
 }
 
 func buildNixOSGeneration(h exec.Host, root string, e exec.EntryInfo) (Generation, error) {
-	m := nixosGenIDRe.FindStringSubmatch(e.Name)
-	if m == nil {
-		return Generation{}, fmt.Errorf("generation path '%s' does not match pattern", e.Name)
-	}
-	id, err := strconv.Atoi(m[1])
+	id, path, err := parseSystemGenLink(root, e)
 	if err != nil {
 		return Generation{}, err
 	}
-
-	path := filepath.Join(root, e.Name)
 
 	verBytes, err := h.ReadFile(filepath.Join(path, "nixos-version"))
 	if err != nil {
