@@ -312,7 +312,7 @@ Setting `utils.microvm.shares.managePermissions = true` generates systemd tmpfil
 
 ## Nilla cli plugins
 
-nilla-utils provides plugins for nilla cli for sub-commands `nilla os` and `nilla home` that can be used to build and switch to NixOS and home-manager systems.
+nilla-utils provides plugins for nilla cli for sub-commands `nilla os`, `nilla darwin` and `nilla home` that can be used to build and switch to NixOS, nix-darwin and home-manager systems.
 
 To install the plugins the following can be added to your NixOS or home-manager modules (provided that `args.inputs = config.inputs;` from the examples above are added).
 
