@@ -680,15 +680,11 @@ func (s *Session) evalDrvPaths(ctx context.Context, names []string) (map[string]
 	return drvs, nil
 }
 
-func (s *Session) askpassExec(id string) exec.Executor {
-	return exec.NewAskpassExec(s.askpassSrv.SocketPath(), s.askpassSrv.Token(), id)
-}
-
 func (s *Session) copyDerivations(ctx context.Context, storeURL string, drvs []string) error {
 	log.Debugf("Copying derivations to %s", storeURL)
 	_, err := nix.Command("copy").
 		Args(append([]string{"--to", storeURL, "--derivation", "-s"}, drvs...)).
-		Executor(s.askpassExec("install-copy-derivation")).
+		Executor(s.nixRemoteExecutor()).
 		Run(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to copy derivations to %s: %w", storeURL, err)
@@ -703,7 +699,7 @@ func (s *Session) buildRemote(ctx context.Context, storeURL string, drvs ...stri
 		return nil, err
 	}
 	args := append([]string{"--store", storeURL, "--no-link"}, outputInstallables(drvs)...)
-	return s.runBuild(ctx, s.askpassExec("install-build"), args, len(drvs))
+	return s.runBuild(ctx, s.nixRemoteExecutor(), args, len(drvs))
 }
 
 // buildOnTarget copies derivations to the target and builds them by running
