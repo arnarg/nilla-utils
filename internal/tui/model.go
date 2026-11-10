@@ -32,6 +32,9 @@ type baseModel struct {
 	verbose     bool
 	initialized bool
 	done        bool
+	// embedded is set when the model is a stage of a Pipeline. The
+	// pipeline then drives sweeps and decides when the stage is done.
+	embedded bool
 
 	list listState
 
@@ -54,6 +57,9 @@ func newBaseModel(maxLines int, verbose bool, initMsg string) baseModel {
 }
 
 func (m baseModel) Init() tea.Cmd {
+	if m.embedded {
+		return m.spinner.Tick
+	}
 	return tea.Batch(m.spinner.Tick, scheduleSweep())
 }
 
@@ -79,6 +85,9 @@ func (m *baseModel) updateCommon(msg tea.Msg, activeCount int) (tea.Cmd, bool) {
 		return cmd, true
 	case sweepMsg:
 		m.list = m.list.sweep(activeCount, listHeight(m.h, m.maxLines), time.Time(msg))
+		if m.embedded {
+			return nil, true
+		}
 		return scheduleSweep(), true
 	}
 	return nil, false

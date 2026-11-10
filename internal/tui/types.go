@@ -25,6 +25,17 @@ func ResolveReporterMode(compact, verbose bool) ReporterMode {
 	return ReporterModeNormal
 }
 
+// settings returns the active list height and verbosity for a mode.
+func (m ReporterMode) settings() (maxLines int, verbose bool) {
+	switch m {
+	case ReporterModeCompact:
+		return 1, false
+	case ReporterModeVerbose:
+		return listHardMax, true
+	}
+	return listHardMax, false
+}
+
 // item is a trackable entry that can appear in the active list or the
 // done buffer. orderKey provides a stable, monotonic screen position.
 type item interface {

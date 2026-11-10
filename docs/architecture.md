@@ -131,6 +131,12 @@ The CLI plugins are built using Go and leverage several internal packages for th
     *   They consume events from `nix.ProgressDecoder` (Doc 13) and update the TUI model (Doc 19).
     *   Show active tasks, overall progress (done/expected/running), and byte transfer rates.
     *   Support verbose mode for detailed log output.
+*   **Deploy Pipeline (`internal/tui/pipeline.go`)**:
+    *   `build`, `test`, `boot` and `switch` run everything up to activation as a single bubbletea program when stdin and stderr are terminals and `--raw` is not given (`internal/deploy/ui.go` picks it, falling back to section headers and per-command reporters).
+    *   Stages are listed up front; the running one shows a spinner and its build/copy progress (the same models as `BuildReporter`/`CopyReporter`, embedded), and finished ones collapse to a summary line in the scrollback.
+    *   The confirmation shows the diff in a browser (`internal/tui/diffbrowser.go`) with category tabs, scrolling and filtering. The full diff is printed to the scrollback once answered.
+    *   Focus reports decide whether `--notify` sends a notification: only when the terminal is not known to be focused, or loses focus while waiting.
+    *   Log output is routed above the program while it runs. Activation runs after it exits, with the terminal released.
 *   **Confirmations (`internal/tui/confirm.go`, Doc 17)**:
     *   Provides a simple `[y/n]` prompt for actions requiring user confirmation (e.g., before switching configurations or cleaning generations).
 *   **General Utilities (`internal/util`)**:

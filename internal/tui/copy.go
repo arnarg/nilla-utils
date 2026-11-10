@@ -21,30 +21,22 @@ type CopyReporter struct {
 }
 
 func NewCopyReporter(mode ReporterMode) *CopyReporter {
-	reporter := &CopyReporter{
-		maxLines: listHardMax,
-	}
-
-	switch mode {
-	case ReporterModeCompact:
-		reporter.maxLines = 1
-	case ReporterModeVerbose:
-		reporter.verbose = true
-	default:
-	}
-
-	return reporter
+	maxLines, verbose := mode.settings()
+	return &CopyReporter{maxLines: maxLines, verbose: verbose}
 }
 
 func (r *CopyReporter) Run(ctx context.Context, decoder *nix.ProgressDecoder) error {
-	m := copyModel{
-		baseModel:         newBaseModel(r.maxLines, r.verbose, "Initializing..."),
+	return runTUIModel(ctx, newCopyModel(r.maxLines, r.verbose, "Initializing..."), decoder)
+}
+
+func newCopyModel(maxLines int, verbose bool, initMsg string) copyModel {
+	return copyModel{
+		baseModel:         newBaseModel(maxLines, verbose, initMsg),
 		copyPathsProgress: progress{id: 0},
 		transferProgress:  transfer{id: 0},
 		copies:            map[int64]*copy{},
 		transfers:         map[int64]int64{},
 	}
-	return runTUIModel(ctx, m, decoder)
 }
 
 type copyModel struct {
@@ -231,6 +223,15 @@ func (m copyModel) summaryView() string {
 	fmt.Fprintf(&b, "%s\n", summaryHeader("Transfers:", transfers))
 	fmt.Fprintf(&b, "%s\n", transfers)
 	return b.String()
+}
+
+// summary describes the finished copy on one line.
+func (m copyModel) summary() string {
+	if m.copyPathsProgress.done == 0 {
+		return "nothing to copy"
+	}
+	total, unit := util.ConvertBytes(m.transferProgress.expected)
+	return fmt.Sprintf("%d copied (%.2f %s)", m.copyPathsProgress.done, total, unit)
 }
 
 func (m copyModel) fmtTransfers() string {

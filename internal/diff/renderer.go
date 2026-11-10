@@ -53,30 +53,25 @@ func (t *terminalRenderer) Render(w io.Writer, r Report) error {
 	// Calculate column widths
 	total := len(r.Changes)
 	numWidth := len(strconv.Itoa(total))
-	nameWidth := 0
-	for _, c := range r.Changes {
-		if len(c.Name) > nameWidth {
-			nameWidth = len(c.Name)
-		}
-	}
+	nameWidth := r.NameWidth()
 
 	// Render sections
 	if len(changed) > 0 {
 		fmt.Fprintln(w, "Version changes:")
 		for i, c := range changed {
-			t.renderChanged(w, i+1, c, numWidth, nameWidth)
+			t.renderRow(w, i+1, c, numWidth, nameWidth)
 		}
 	}
 	if len(added) > 0 {
 		fmt.Fprintln(w, "Added packages:")
 		for i, c := range added {
-			t.renderAdded(w, i+1+len(changed), c, numWidth, nameWidth)
+			t.renderRow(w, i+1+len(changed), c, numWidth, nameWidth)
 		}
 	}
 	if len(removed) > 0 {
 		fmt.Fprintln(w, "Removed packages:")
 		for i, c := range removed {
-			t.renderRemoved(w, i+1+len(changed)+len(added), c, numWidth, nameWidth)
+			t.renderRow(w, i+1+len(changed)+len(added), c, numWidth, nameWidth)
 		}
 	}
 
@@ -84,42 +79,69 @@ func (t *terminalRenderer) Render(w io.Writer, r Report) error {
 	return nil
 }
 
-func (t *terminalRenderer) renderChanged(w io.Writer, num int, c Change, numWidth, nameWidth int) {
-	paddedNum := fmt.Sprintf("%0*d", numWidth, num)
-	styledName := lipgloss.NewStyle().Width(nameWidth).Foreground(colorPackage).Render(string(c.Name))
-
-	prefixLen := longestCommonPrefix(c.Before, c.After)
-	beforeStr := t.formatVersions(c.Before, prefixLen, colorRemoved)
-	afterStr := t.formatVersions(c.After, prefixLen, colorAdded)
-
-	fmt.Fprintf(w, "#%s  %s  %s -> %s\n", paddedNum, styledName, beforeStr, afterStr)
-}
-
-func (t *terminalRenderer) renderAdded(w io.Writer, num int, c Change, numWidth, nameWidth int) {
-	paddedNum := fmt.Sprintf("%0*d", numWidth, num)
-	styledName := lipgloss.NewStyle().Width(nameWidth).Foreground(colorPackage).Render(string(c.Name))
-	versions := lipgloss.NewStyle().Foreground(colorPrefix).Render(versionsToString(c.After))
-	fmt.Fprintf(w, "#%s  %s  %s\n", paddedNum, styledName, versions)
-}
-
-func (t *terminalRenderer) renderRemoved(w io.Writer, num int, c Change, numWidth, nameWidth int) {
-	paddedNum := fmt.Sprintf("%0*d", numWidth, num)
-	styledName := lipgloss.NewStyle().Width(nameWidth).Foreground(colorPackage).Render(string(c.Name))
-	versions := lipgloss.NewStyle().Foreground(colorMuted).Render(versionsToString(c.Before))
-	fmt.Fprintf(w, "#%s  %s  %s\n", paddedNum, styledName, versions)
+func (t *terminalRenderer) renderRow(w io.Writer, num int, c Change, numWidth, nameWidth int) {
+	fmt.Fprintf(w, "#%0*d  %s\n", numWidth, num, FormatChange(c, nameWidth))
 }
 
 func (t *terminalRenderer) renderStats(w io.Writer, r Report) {
+	fmt.Fprintln(w, FormatClosure(r))
+}
+
+// FormatChange renders a change as its name, padded to nameWidth, followed by
+// its versions: "before -> after" for changes, the versions alone otherwise.
+func FormatChange(c Change, nameWidth int) string {
+	styledName := lipgloss.NewStyle().Width(nameWidth).Foreground(colorPackage).Render(string(c.Name))
+
+	switch c.Type {
+	case Added:
+		return styledName + "  " + lipgloss.NewStyle().Foreground(colorPrefix).Render(versionsToString(c.After))
+	case Removed:
+		return styledName + "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(versionsToString(c.Before))
+	}
+
+	prefixLen := longestCommonPrefix(c.Before, c.After)
+	beforeStr := formatVersions(c.Before, prefixLen, colorRemoved)
+	afterStr := formatVersions(c.After, prefixLen, colorAdded)
+
+	return fmt.Sprintf("%s  %s -> %s", styledName, beforeStr, afterStr)
+}
+
+// FormatClosure renders the closure path count and disk usage change.
+func FormatClosure(r Report) string {
 	diffVal, negative, unit := util.DiffBytes(r.BytesBefore, r.BytesAfter)
 	prefix := "+"
 	if negative {
 		prefix = "-"
 	}
-	fmt.Fprintf(w, "Closure size: %d -> %d (disk usage %s%.2f%s)\n",
+	return fmt.Sprintf("Closure size: %d -> %d (disk usage %s%.2f%s)",
 		r.NumBefore, r.NumAfter, prefix, diffVal, unit)
 }
 
-func (t *terminalRenderer) formatVersions(vers []Version, highlight int, clr color.Color) string {
+// Counts returns the number of changed, added and removed packages.
+func (r Report) Counts() (changed, added, removed int) {
+	for _, c := range r.Changes {
+		switch c.Type {
+		case Changed:
+			changed++
+		case Added:
+			added++
+		case Removed:
+			removed++
+		}
+	}
+	return changed, added, removed
+}
+
+// NameWidth returns the length of the longest package name in the report.
+func (r Report) NameWidth() int {
+	w := 0
+	for _, c := range r.Changes {
+		w = max(w, len(c.Name))
+	}
+	return w
+}
+
+func formatVersions(vers []Version, highlight int, clr color.Color) string {
 	if len(vers) == 0 {
 		return lipgloss.NewStyle().Foreground(colorMuted).Render("<none>")
 	}

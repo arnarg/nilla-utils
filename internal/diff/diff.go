@@ -171,3 +171,11 @@ func Execute(from, to *Generation) error {
 
 	return nil
 }
+
+// Render renders the report with the terminal renderer and returns it
+// without a trailing newline.
+func Render(r Report) string {
+	var b strings.Builder
+	_ = NewTerminalRenderer().Render(&b, r)
+	return strings.TrimRight(b.String(), "\n")
+}

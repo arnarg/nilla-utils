@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"charm.land/log/v2"
 	"github.com/arnarg/nilla-utils/internal/diff"
 	"github.com/arnarg/nilla-utils/internal/nix"
 	"github.com/arnarg/nilla-utils/internal/tui"
 	"github.com/arnarg/nilla-utils/internal/util"
-	"github.com/gen2brain/beeep"
 )
 
 func printSection(text string) {
@@ -83,11 +83,11 @@ func buildSSHURLFromParts(user, hostname, port string) string {
 	return addr
 }
 
-func (s *Session) Build(ctx context.Context) (string, error) {
+func (s *Session) Build(ctx context.Context, u ui) (string, error) {
 	p := s.Plan
 
 	if p.BuildTarget != "" && p.StoreAddr != "" {
-		if err := s.prepareRemoteBuild(ctx); err != nil {
+		if err := s.prepareRemoteBuild(ctx, u); err != nil {
 			return "", err
 		}
 	}
@@ -95,78 +95,104 @@ func (s *Session) Build(ctx context.Context) (string, error) {
 	nargs := buildArgs(p)
 
 	log.Debugf("Nix build arguments: %v", nargs)
-	printSection("Building system")
+	u.begin(stageBuild)
 
 	cmd := nix.Command("build").Args(nargs).Executor(s.BuildExecutor())
-	if !p.Raw {
-		cmd = cmd.Reporter(tui.NewBuildReporter(tui.ResolveReporterMode(p.Compact, p.Verbose)))
+	if r := u.reporter(stageBuild); r != nil {
+		cmd = cmd.Reporter(r)
 	}
 
 	out, err := cmd.Run(ctx)
 	if err != nil {
+		u.fail(stageBuild)
 		log.Debugf("Nix build command failed with error: %v", err)
 		return "", fmt.Errorf("failed to build configuration: %w", err)
 	}
+	u.done(stageBuild, "")
 	log.Debugf("Build completed successfully, output path: %s", string(out))
 
 	return string(out), nil
 }
 
-func (s *Session) prepareRemoteBuild(ctx context.Context) error {
+func (s *Session) prepareRemoteBuild(ctx context.Context, u ui) error {
 	p := s.Plan
 
-	printSection("Getting derivation path")
+	u.begin(stageEval)
 	derivationAttr := fmt.Sprintf("%s.drvPath", p.Attr)
-	evalOut, err := nix.Command("eval").
+	cmd := nix.Command("eval").
 		Args([]string{"-f", p.Source.FullNillaPath(), derivationAttr, "--raw"}).
-		Executor(s.local).
-		Run(ctx)
+		Executor(s.local)
+	if r := u.reporter(stageEval); r != nil {
+		cmd = cmd.Reporter(r)
+	}
+	evalOut, err := cmd.Run(ctx)
 	if err != nil {
+		u.fail(stageEval)
 		return fmt.Errorf("failed to get derivation path: %w", err)
 	}
-
-	printSection("Copying derivation to remote host")
 	drvPath := strings.TrimSpace(string(evalOut))
-	_, err = nix.Command("copy").
+	u.done(stageEval, extractStoreName(drvPath))
+
+	u.begin(stageCopyDrv)
+	cmd = nix.Command("copy").
 		Args([]string{"--to", p.StoreAddr, "--derivation", "-s", drvPath}).
-		Executor(s.nixRemoteExecutor()).
-		Run(ctx)
-	if err != nil {
+		Executor(s.nixRemoteExecutor())
+	if r := u.reporter(stageCopyDrv); r != nil {
+		cmd = cmd.Reporter(r)
+	}
+	if _, err := cmd.Run(ctx); err != nil {
+		u.fail(stageCopyDrv)
 		return fmt.Errorf("failed to copy derivation to remote: %w", err)
 	}
+	u.done(stageCopyDrv, "")
 
 	return nil
 }
 
-func (s *Session) Diff(ctx context.Context, outPath string) error {
+// extractStoreName returns the name of a store path without its hash.
+func extractStoreName(p string) string {
+	base := p[strings.LastIndex(p, "/")+1:]
+	if _, name, ok := strings.Cut(base, "-"); ok {
+		return name
+	}
+	return base
+}
+
+func (s *Session) Diff(ctx context.Context, u ui, outPath string) error {
 	if s.Plan.NoDiff {
 		log.Debug("Skipping diff (--no-diff)")
 		return nil
 	}
 
-	fmt.Fprintln(os.Stderr)
-	printSection("Comparing changes")
+	u.begin(stageDiff)
 
 	current, err := s.System.CurrentGeneration(s.target, s.Plan.Name)
 	if errors.Is(err, ErrNoCurrentGeneration) {
 		log.Infof("No previous generation found, skipping diff")
+		u.skip(stageDiff, "no previous generation")
 		return nil
 	}
 	if err != nil {
 		log.Warnf("Failed to resolve current generation, skipping diff: %v", err)
+		u.skip(stageDiff, "current generation not found")
 		return nil
 	}
 
 	log.Debugf("Running diff: current=%s, new=%s", current.Path, outPath)
 
-	if err := diff.Execute(
+	report, err := diff.CalculateReport(ctx,
 		&diff.Generation{Path: current.Path, Querier: current.Querier},
 		&diff.Generation{Path: outPath, Querier: diff.NewExecutorQuerier(s.forDiff)},
-	); err != nil {
+	)
+	if err != nil {
 		log.Warnf("Failed to compare changes, skipping diff: %v", err)
+		u.skip(stageDiff, "comparison failed")
 		return nil
 	}
 	log.Debugf("Diff execution completed successfully")
+
+	u.done(stageDiff, tui.DiffSummary(report))
+	u.showDiff(report)
 
 	return nil
 }
@@ -176,34 +202,68 @@ func Confirm(skip bool) (bool, error) {
 		return true, nil
 	}
 
-	return tui.RunConfirm("Do you want to continue?")
+	return tui.RunConfirm(confirmPrompt)
 }
 
-func (s *Session) Copy(ctx context.Context, outPath string) error {
+func (s *Session) confirm(u ui) (bool, error) {
+	if s.Plan.Confirm {
+		return true, nil
+	}
+	u.begin(stageConfirm)
+	return u.confirm()
+}
+
+func (s *Session) Copy(ctx context.Context, u ui, outPath string) error {
 	cp := resolveCopy(s.Plan, outPath)
 	if cp.skip {
 		return nil
 	}
 
-	fmt.Fprintln(os.Stderr)
-	printSection("Copying system to target")
+	u.begin(stageCopy)
 
 	cmd := nix.Command("copy").
 		Args(cp.args).
 		Executor(s.CopyExecutor())
-	if !s.Plan.Raw {
-		cmd = cmd.Reporter(tui.NewCopyReporter(tui.ResolveReporterMode(s.Plan.Compact, s.Plan.Verbose)))
+	if r := u.reporter(stageCopy); r != nil {
+		cmd = cmd.Reporter(r)
 	}
-	_, err := cmd.Run(ctx)
-	return err
+	if _, err := cmd.Run(ctx); err != nil {
+		u.fail(stageCopy)
+		return err
+	}
+	u.done(stageCopy, "")
+	return nil
 }
 
 func (s *Session) Activate(ctx context.Context, outPath string) error {
 	return s.System.Activate(ctx, s.target, outPath, s.Plan.SubCmd)
 }
 
+// errInterrupted is returned by Run when the user interrupts the stages.
+var errInterrupted = errors.New("interrupted")
+
+// Run builds, compares, confirms and copies the configuration as one
+// interactive program, then activates it once the terminal is released.
 func (s *Session) Run(ctx context.Context) error {
-	outPath, err := s.Build(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var interrupted atomic.Bool
+	var u ui = &plainUI{plan: s.Plan}
+	if useTUI(s.Plan) {
+		u = newTUI(s.Plan, func() {
+			interrupted.Store(true)
+			cancel()
+		})
+	}
+
+	outPath, proceed, err := s.runStages(ctx, u)
+	if cerr := u.close(); cerr != nil && err == nil {
+		err = cerr
+	}
+	if interrupted.Load() {
+		return errInterrupted
+	}
 	if err != nil {
 		return err
 	}
@@ -213,27 +273,36 @@ func (s *Session) Run(ctx context.Context) error {
 		fmt.Println(outPath)
 	}
 
-	if err := s.Diff(ctx, outPath); err != nil {
-		return err
+	if !proceed {
+		return nil
+	}
+	return s.Activate(ctx, outPath)
+}
+
+// runStages runs everything up to activation, and reports whether
+// activation should follow.
+func (s *Session) runStages(ctx context.Context, u ui) (string, bool, error) {
+	outPath, err := s.Build(ctx, u)
+	if err != nil {
+		return "", false, err
+	}
+
+	if err := s.Diff(ctx, u, outPath); err != nil {
+		return "", false, err
 	}
 
 	if s.Plan.SubCmd == Build {
-		return nil
+		return outPath, false, nil
 	}
 
-	if s.Plan.Notify && !s.Plan.Confirm {
-		beeep.AppName = "nilla-utils"
-		_ = beeep.Notify("nilla-utils", fmt.Sprintf("%s '%s' ready, awaiting confirmation", s.Plan.SubCmd, s.Plan.Name), "")
-	}
-
-	ok, err := Confirm(s.Plan.Confirm)
+	ok, err := s.confirm(u)
 	if err != nil || !ok {
-		return err
+		return outPath, false, err
 	}
 
-	if err := s.Copy(ctx, outPath); err != nil {
-		return err
+	if err := s.Copy(ctx, u, outPath); err != nil {
+		return "", false, err
 	}
 
-	return s.Activate(ctx, outPath)
+	return outPath, true, nil
 }

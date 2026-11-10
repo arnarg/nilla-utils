@@ -21,24 +21,17 @@ type BuildReporter struct {
 }
 
 func NewBuildReporter(mode ReporterMode) *BuildReporter {
-	reporter := &BuildReporter{
-		maxLines: listHardMax,
-	}
-
-	switch mode {
-	case ReporterModeCompact:
-		reporter.maxLines = 1
-	case ReporterModeVerbose:
-		reporter.verbose = true
-	default:
-	}
-
-	return reporter
+	maxLines, verbose := mode.settings()
+	return &BuildReporter{maxLines: maxLines, verbose: verbose}
 }
 
 func (r *BuildReporter) Run(ctx context.Context, decoder *nix.ProgressDecoder) error {
-	m := buildModel{
-		baseModel:         newBaseModel(r.maxLines, r.verbose, "Initializing build..."),
+	return runTUIModel(ctx, newBuildModel(r.maxLines, r.verbose, "Initializing build..."), decoder)
+}
+
+func newBuildModel(maxLines int, verbose bool, initMsg string) buildModel {
+	return buildModel{
+		baseModel:         newBaseModel(maxLines, verbose, initMsg),
 		buildProgress:     progress{id: 0},
 		copyPathsProgress: progress{id: 0},
 		realiseProgress:   transfer{id: 0},
@@ -46,7 +39,6 @@ func (r *BuildReporter) Run(ctx context.Context, decoder *nix.ProgressDecoder) e
 		builds:            map[int64]*build{},
 		transfers:         map[int64]int64{},
 	}
-	return runTUIModel(ctx, m, decoder)
 }
 
 func extractName(p string) string {
@@ -286,6 +278,23 @@ func (m buildModel) summaryView() string {
 	)
 	fmt.Fprintf(&b, "%s | %s\n", builds, downloads)
 	return b.String()
+}
+
+// summary describes the finished build on one line.
+func (m buildModel) summary() string {
+	built, fetched := m.buildProgress.done, m.copyPathsProgress.done
+	if built == 0 && fetched == 0 {
+		return "nothing to build"
+	}
+	parts := []string{}
+	if built > 0 {
+		parts = append(parts, fmt.Sprintf("%d built", built))
+	}
+	if fetched > 0 {
+		total, unit := util.ConvertBytes(m.realiseProgress.expected)
+		parts = append(parts, fmt.Sprintf("%d fetched (%.2f %s)", fetched, total, unit))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (m buildModel) fmtBuilds() string {

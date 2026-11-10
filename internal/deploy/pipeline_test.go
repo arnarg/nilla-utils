@@ -150,7 +150,7 @@ func (noGenerationSystem) CurrentGeneration(_ exec.Executor, _ string) (*Generat
 func TestSession_DiffSkipsWithoutCurrentGeneration(t *testing.T) {
 	s := &Session{Plan: &Plan{SubCmd: Switch}, System: noGenerationSystem{}}
 	// outPath is never read: Diff returns before comparing generations.
-	if err := s.Diff(context.Background(), "/nix/store/abc123-home-manager-generation"); err != nil {
+	if err := s.Diff(context.Background(), &plainUI{plan: s.Plan}, "/nix/store/abc123-home-manager-generation"); err != nil {
 		t.Fatalf("expected diff to be skipped without error, got: %v", err)
 	}
 }
