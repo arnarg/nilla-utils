@@ -33,11 +33,10 @@ type baseModel struct {
 	initialized bool
 	done        bool
 	// embedded is set when the model is a stage of a Pipeline. The
-	// pipeline then drives sweeps and decides when the stage is done.
+	// pipeline then drives sweeps and decides when the stage is done,
+	// and the model hides informational messages and draws nothing until
+	// nix reports progress, leaving the stage's spinner on its own.
 	embedded bool
-	// quiet hides informational messages and draws nothing until nix
-	// reports progress.
-	quiet bool
 
 	list listState
 

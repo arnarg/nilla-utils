@@ -57,7 +57,7 @@ func TestPipeline_StageFlow(t *testing.T) {
 	}
 
 	m.Update(stageBeginMsg{id: 1})
-	bm := newBuildModel(listHardMax, false, "Initializing build...")
+	bm := newBuildModel(listHardMax, false, "")
 	bm.embedded = true
 	m.Update(stageAttachMsg{id: 1, model: bm})
 	m.Update(stageEventMsg{id: 1, ev: nix.StartBuildsEvent{ID: 7}})
@@ -328,24 +328,43 @@ func TestPipeline_ConfirmIsUntimed(t *testing.T) {
 	}
 }
 
-func TestPipeline_EvalStageQuietUntilProgress(t *testing.T) {
+func TestPipeline_BuildStageQuietUntilProgress(t *testing.T) {
 	m := newTestPipelineModel(nil)
 	m.Update(stageBeginMsg{id: 1})
 	bm := newBuildModel(listHardMax, false, "")
-	bm.embedded, bm.quiet = true, true
+	bm.embedded = true
 	m.Update(stageAttachMsg{id: 1, model: bm})
 
 	// Informational messages are not shown.
 	m.Update(stageEventMsg{id: 1, ev: nix.MessageEvent{Text: "evaluating file 'x'", Level: 3}})
 	v := view(m)
 	if lines := strings.Split(strings.TrimSpace(v), "\n"); len(lines) != 3 || strings.Contains(v, "evaluating") {
-		t.Fatalf("eval stage has a body before progress:\n%s", v)
+		t.Fatalf("stage has a body before progress:\n%s", v)
 	}
 
-	// Builds during evaluation show the progress view.
+	// Builds show the progress view.
 	m.Update(stageEventMsg{id: 1, ev: nix.StartBuildsEvent{ID: 7}})
 	m.Update(stageEventMsg{id: 1, ev: nix.StartBuildEvent{ID: 8, Path: "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ifd.drv"}})
 	if v := view(m); !strings.Contains(v, "Builds:") || !strings.Contains(v, "ifd") {
-		t.Fatalf("eval stage hides build progress:\n%s", v)
+		t.Fatalf("stage hides build progress:\n%s", v)
+	}
+}
+
+func TestPipeline_CopyStageQuietUntilProgress(t *testing.T) {
+	m := newTestPipelineModel(nil)
+	m.Update(stageBeginMsg{id: 3})
+	cm := newCopyModel(listHardMax, false, "")
+	cm.embedded = true
+	m.Update(stageAttachMsg{id: 3, model: cm})
+
+	m.Update(stageEventMsg{id: 3, ev: nix.MessageEvent{Text: "copying 3 paths", Level: 3}})
+	v := view(m)
+	if lines := strings.Split(strings.TrimSpace(v), "\n"); len(lines) != 3 || strings.Contains(v, "copying") {
+		t.Fatalf("stage has a body before progress:\n%s", v)
+	}
+
+	m.Update(stageEventMsg{id: 3, ev: nix.StartCopyPathsEvent{ID: 9}})
+	if v := view(m); !strings.Contains(v, "Transfers:") {
+		t.Fatalf("stage hides copy progress:\n%s", v)
 	}
 }

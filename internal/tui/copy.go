@@ -182,7 +182,9 @@ func (m copyModel) handleMessageEvent(ev nix.MessageEvent) (tea.Model, tea.Cmd) 
 		return m, tea.Printf("%s", ev.Text)
 	}
 
-	m.lastMsg = ev.Text
+	if !m.embedded {
+		m.lastMsg = ev.Text
+	}
 	return m, nil
 }
 
@@ -194,6 +196,9 @@ func (m copyModel) View() tea.View {
 		return tea.NewView(m.summaryView())
 	}
 	if !m.initialized {
+		if m.embedded {
+			return tea.NewView("")
+		}
 		return tea.NewView(m.uninitializedView())
 	}
 	return tea.NewView(m.progressView())

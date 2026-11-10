@@ -192,12 +192,10 @@ func (u *tuiUI) fail(st stage)                 { u.pipeline.Fail(st) }
 
 func (u *tuiUI) reporter(st stage) nix.ProgressReporter {
 	switch st {
-	case stageEval:
-		return u.pipeline.Reporter(st, tui.EvalProgress, "")
-	case stageBuild:
-		return u.pipeline.Reporter(st, tui.BuildProgress, "Initializing build...")
+	case stageEval, stageBuild:
+		return u.pipeline.Reporter(st, tui.BuildProgress)
 	case stageCopyDrv, stageCopy:
-		return u.pipeline.Reporter(st, tui.CopyProgress, "Initializing...")
+		return u.pipeline.Reporter(st, tui.CopyProgress)
 	}
 	return nil
 }

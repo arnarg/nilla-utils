@@ -37,10 +37,6 @@ const (
 	BuildProgress ReporterKind = iota
 	// CopyProgress shows path transfers, like nix copy.
 	CopyProgress
-	// EvalProgress shows nothing until nix builds or downloads something
-	// during evaluation (import-from-derivation, fetchers). Warnings are
-	// still printed.
-	EvalProgress
 )
 
 type PipelineOptions struct {
@@ -174,9 +170,11 @@ func (p *Pipeline) Confirm(id StageID, prompt string, report *diff.Report) (bool
 }
 
 // Reporter returns a progress reporter that renders nix progress as part
-// of a stage. initMsg is shown until nix reports progress.
-func (p *Pipeline) Reporter(id StageID, kind ReporterKind, initMsg string) nix.ProgressReporter {
-	return &pipelineReporter{p: p, id: id, kind: kind, initMsg: initMsg}
+// of a stage. The stage shows nothing below its header until nix reports
+// progress, e.g. builds and downloads during evaluation. Warnings are
+// printed and errors collected all the same.
+func (p *Pipeline) Reporter(id StageID, kind ReporterKind) nix.ProgressReporter {
+	return &pipelineReporter{p: p, id: id, kind: kind}
 }
 
 // LogWriter returns a writer that prints each line above the program, for
@@ -186,10 +184,9 @@ func (p *Pipeline) LogWriter() io.Writer {
 }
 
 type pipelineReporter struct {
-	p       *Pipeline
-	id      StageID
-	kind    ReporterKind
-	initMsg string
+	p    *Pipeline
+	id   StageID
+	kind ReporterKind
 }
 
 func (r *pipelineReporter) Run(ctx context.Context, decoder *nix.ProgressDecoder) error {
@@ -197,17 +194,12 @@ func (r *pipelineReporter) Run(ctx context.Context, decoder *nix.ProgressDecoder
 
 	var m stageModel
 	switch r.kind {
-	case EvalProgress:
-		bm := newBuildModel(maxLines, verbose, "")
-		bm.embedded = true
-		bm.quiet = true
-		m = bm
 	case CopyProgress:
-		cm := newCopyModel(maxLines, verbose, r.initMsg)
+		cm := newCopyModel(maxLines, verbose, "")
 		cm.embedded = true
 		m = cm
 	default:
-		bm := newBuildModel(maxLines, verbose, r.initMsg)
+		bm := newBuildModel(maxLines, verbose, "")
 		bm.embedded = true
 		m = bm
 	}
