@@ -327,3 +327,25 @@ func TestPipeline_ConfirmIsUntimed(t *testing.T) {
 		t.Errorf("copy stage lacks elapsed time:\n%s", v)
 	}
 }
+
+func TestPipeline_EvalStageQuietUntilProgress(t *testing.T) {
+	m := newTestPipelineModel(nil)
+	m.Update(stageBeginMsg{id: 1})
+	bm := newBuildModel(listHardMax, false, "")
+	bm.embedded, bm.quiet = true, true
+	m.Update(stageAttachMsg{id: 1, model: bm})
+
+	// Informational messages are not shown.
+	m.Update(stageEventMsg{id: 1, ev: nix.MessageEvent{Text: "evaluating file 'x'", Level: 3}})
+	v := view(m)
+	if lines := strings.Split(strings.TrimSpace(v), "\n"); len(lines) != 3 || strings.Contains(v, "evaluating") {
+		t.Fatalf("eval stage has a body before progress:\n%s", v)
+	}
+
+	// Builds during evaluation show the progress view.
+	m.Update(stageEventMsg{id: 1, ev: nix.StartBuildsEvent{ID: 7}})
+	m.Update(stageEventMsg{id: 1, ev: nix.StartBuildEvent{ID: 8, Path: "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ifd.drv"}})
+	if v := view(m); !strings.Contains(v, "Builds:") || !strings.Contains(v, "ifd") {
+		t.Fatalf("eval stage hides build progress:\n%s", v)
+	}
+}

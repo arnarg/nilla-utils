@@ -35,6 +35,9 @@ type baseModel struct {
 	// embedded is set when the model is a stage of a Pipeline. The
 	// pipeline then drives sweeps and decides when the stage is done.
 	embedded bool
+	// quiet hides informational messages and draws nothing until nix
+	// reports progress.
+	quiet bool
 
 	list listState
 

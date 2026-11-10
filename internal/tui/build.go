@@ -229,7 +229,9 @@ func (m buildModel) handleMessageEvent(ev nix.MessageEvent) (tea.Model, tea.Cmd)
 	}
 
 	// Non-verbose, non-warning messages: display next to spinner
-	m.lastMsg = ev.Text
+	if !m.quiet {
+		m.lastMsg = ev.Text
+	}
 	return m, nil
 }
 
@@ -241,6 +243,9 @@ func (m buildModel) View() tea.View {
 		return tea.NewView(m.summaryView())
 	}
 	if !m.initialized {
+		if m.quiet {
+			return tea.NewView("")
+		}
 		return tea.NewView(m.uninitializedView())
 	}
 	return tea.NewView(m.progressView())

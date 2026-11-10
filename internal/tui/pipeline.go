@@ -37,6 +37,10 @@ const (
 	BuildProgress ReporterKind = iota
 	// CopyProgress shows path transfers, like nix copy.
 	CopyProgress
+	// EvalProgress shows nothing until nix builds or downloads something
+	// during evaluation (import-from-derivation, fetchers). Warnings are
+	// still printed.
+	EvalProgress
 )
 
 type PipelineOptions struct {
@@ -193,6 +197,11 @@ func (r *pipelineReporter) Run(ctx context.Context, decoder *nix.ProgressDecoder
 
 	var m stageModel
 	switch r.kind {
+	case EvalProgress:
+		bm := newBuildModel(maxLines, verbose, "")
+		bm.embedded = true
+		bm.quiet = true
+		m = bm
 	case CopyProgress:
 		cm := newCopyModel(maxLines, verbose, r.initMsg)
 		cm.embedded = true
