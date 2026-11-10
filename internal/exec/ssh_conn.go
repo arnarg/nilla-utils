@@ -112,7 +112,7 @@ func dialSSH(ctx context.Context, target string) (*sshConn, error) {
 		return nil, fmt.Errorf("connecting to remote hosts requires the OpenSSH client (ssh) in PATH: %w", err)
 	}
 
-	user, host, port := parseTarget(target)
+	user, host, port := util.ParseTarget(target)
 	if host == "" {
 		return nil, fmt.Errorf("invalid SSH target %q", target)
 	}

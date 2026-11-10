@@ -92,7 +92,7 @@ func TestDarwinSystem_Rollback(t *testing.T) {
 }
 
 func TestDarwinSystem_CollectGarbage(t *testing.T) {
-	wantScript := DarwinPathExport + "; exec nix store gc -v"
+	wantScript := DarwinPathExport + "; exec nix --extra-experimental-features nix-command store gc -v"
 
 	t.Run("local runs a shell with the darwin PATH", func(t *testing.T) {
 		h := newFakeHost(true)

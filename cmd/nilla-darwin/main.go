@@ -156,20 +156,21 @@ func run(ctx context.Context, cmd *cli.Command, sc deploy.Command) error {
 	util.InitLogger(verboseCount)
 
 	plan, err := deploy.ResolvePlan(deploy.Options{
-		ProjectPath: cmd.String("project"),
-		Name:        cmd.Args().First(),
-		SubCmd:      sc,
-		BuildOn:     cmd.String("build-on"),
-		BuildOnSelf: cmd.Bool("build-on-target"),
-		Target:      cmd.String("target"),
-		Raw:         cmd.Bool("raw"),
-		Verbose:     cmd.Bool("verbose"),
-		Compact:     cmd.Bool("compact"),
-		NoLink:      cmd.Bool("no-link"),
-		OutLink:     cmd.String("out-link"),
-		Confirm:     cmd.Bool("confirm"),
-		Notify:      cmd.Bool("notify"),
-		NoDiff:      cmd.Bool("no-diff"),
+		ProjectPath:   cmd.String("project"),
+		Name:          cmd.Args().First(),
+		SubCmd:        sc,
+		BuildOn:       cmd.String("build-on"),
+		BuildOnSelf:   cmd.Bool("build-on-target"),
+		Target:        cmd.String("target"),
+		Raw:           cmd.Bool("raw"),
+		Verbose:       cmd.Bool("verbose"),
+		Compact:       cmd.Bool("compact"),
+		NoLink:        cmd.Bool("no-link"),
+		OutLink:       cmd.String("out-link"),
+		PrintOutPaths: cmd.Bool("print-out-paths"),
+		Confirm:       cmd.Bool("confirm"),
+		Notify:        cmd.Bool("notify"),
+		NoDiff:        cmd.Bool("no-diff"),
 	}, deploy.DarwinSystem{})
 	if err != nil {
 		return err

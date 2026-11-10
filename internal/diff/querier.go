@@ -57,7 +57,7 @@ func (q *executorQuerier) QueryPackages(ctx context.Context, path string) ([]Pac
 
 func (q *executorQuerier) GetClosureSize(ctx context.Context, path string) (int64, error) {
 	buf := &bytes.Buffer{}
-	cmd, err := q.exec.Command("nix", "path-info", "--json", "--closure-size", path)
+	cmd, err := q.exec.Command("nix", "--extra-experimental-features", "nix-command", "path-info", "--json", "--closure-size", path)
 	if err != nil {
 		return 0, fmt.Errorf("create command: %w", err)
 	}

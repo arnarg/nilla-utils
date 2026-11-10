@@ -172,6 +172,27 @@ func TestParseTarget(t *testing.T) {
 			expectedHost: "localhost",
 			expectedPort: "2222",
 		},
+		{
+			name:         "ipv6 with user and port",
+			target:       "user@[::1]:222",
+			expectedUser: "user",
+			expectedHost: "::1",
+			expectedPort: "222",
+		},
+		{
+			name:         "ipv6 without user or port",
+			target:       "[fe80::1]",
+			expectedUser: "",
+			expectedHost: "fe80::1",
+			expectedPort: "",
+		},
+		{
+			name:         "ipv6 with user but not port",
+			target:       "root@[2001:db8::1]",
+			expectedUser: "root",
+			expectedHost: "2001:db8::1",
+			expectedPort: "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -242,6 +263,19 @@ func TestBuildStoreAddress(t *testing.T) {
 			hostname:       "hostname",
 			port:           "2222",
 			expectedOutput: "ssh-ng://hostname?port=2222",
+		},
+		{
+			name:           "ipv6 is bracketed",
+			user:           "root",
+			hostname:       "fe80::1",
+			port:           "2222",
+			expectedOutput: "ssh-ng://root@[fe80::1]?port=2222",
+		},
+		{
+			name:           "ipv6 without user",
+			user:           "",
+			hostname:       "::1",
+			expectedOutput: "ssh-ng://[::1]",
 		},
 	}
 

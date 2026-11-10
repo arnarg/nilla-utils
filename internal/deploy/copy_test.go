@@ -90,6 +90,22 @@ func TestResolveCopy(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "ipv6 build and deploy targets",
+			plan: &Plan{
+				BuildTarget:  "builduser@[fd00::2]:2222",
+				BuildPort:    "2222",
+				DeployTarget: "root@[fe80::1]:3333",
+				DeployPort:   "3333",
+			},
+			want: copyPlan{
+				args: []string{
+					"--to", "ssh://root@[fe80::1]?port=3333",
+					"--from", "ssh-ng://builduser@[fd00::2]?port=2222",
+					outPath,
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

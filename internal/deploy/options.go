@@ -49,8 +49,9 @@ type Options struct {
 	Verbose bool
 	Compact bool
 
-	NoLink  bool
-	OutLink string
+	NoLink        bool
+	OutLink       string
+	PrintOutPaths bool
 
 	Confirm bool
 	Notify  bool
@@ -75,8 +76,9 @@ type Plan struct {
 	Verbose bool
 	Compact bool
 
-	NoLink  bool
-	OutLink string
+	NoLink        bool
+	OutLink       string
+	PrintOutPaths bool
 
 	Confirm bool
 	Notify  bool
@@ -140,22 +142,23 @@ func ResolvePlan(opts Options, sys System) (*Plan, error) {
 	}
 
 	return &Plan{
-		Source:       source,
-		Attr:         attr,
-		Name:         name,
-		SubCmd:       opts.SubCmd,
-		BuildTarget:  buildTarget,
-		DeployTarget: opts.Target,
-		StoreAddr:    storeAddr,
-		BuildPort:    buildPort,
-		DeployPort:   deployPort,
-		Raw:          opts.Raw,
-		Verbose:      opts.Verbose,
-		Compact:      opts.Compact,
-		NoLink:       opts.NoLink,
-		OutLink:      opts.OutLink,
-		Confirm:      opts.Confirm,
-		Notify:       opts.Notify,
-		NoDiff:       opts.NoDiff,
+		Source:        source,
+		Attr:          attr,
+		Name:          name,
+		SubCmd:        opts.SubCmd,
+		BuildTarget:   buildTarget,
+		DeployTarget:  opts.Target,
+		StoreAddr:     storeAddr,
+		BuildPort:     buildPort,
+		DeployPort:    deployPort,
+		Raw:           opts.Raw,
+		Verbose:       opts.Verbose,
+		Compact:       opts.Compact,
+		NoLink:        opts.NoLink,
+		OutLink:       opts.OutLink,
+		PrintOutPaths: opts.PrintOutPaths,
+		Confirm:       opts.Confirm,
+		Notify:        opts.Notify,
+		NoDiff:        opts.NoDiff,
 	}, nil
 }

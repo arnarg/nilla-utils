@@ -155,37 +155,3 @@ func (c *sshCommand) wrapErr(err error) error {
 	}
 	return err
 }
-
-func parseTarget(target string) (user string, host string, port string) {
-	// Split on @
-	parts := strings.SplitN(target, "@", 2)
-
-	// If there's 2 parts, we have a user@host
-	if len(parts) == 2 {
-		user = parts[0]
-		host = parts[1]
-	} else {
-		host = parts[0]
-	}
-
-	// IPv6 addresses are written as [addr] or [addr]:port
-	if strings.HasPrefix(host, "[") {
-		if end := strings.Index(host, "]"); end > 0 {
-			addr, rest := host[1:end], host[end+1:]
-			host = addr
-			port = strings.TrimPrefix(rest, ":")
-			return
-		}
-	}
-
-	// Check if port is specified
-	parts = strings.SplitN(host, ":", 2)
-
-	// If there's 2 parts, we have host:port
-	if len(parts) == 2 {
-		host = parts[0]
-		port = parts[1]
-	}
-
-	return
-}

@@ -345,9 +345,9 @@ func parseDiskCheck(out string, disks map[string]string) []diskState {
 // does not need to copy it a second time. An empty user is left out so ssh
 // picks the user from its config, the same way the SSH executor does.
 func installStoreURL(user, host, port, root string) string {
-	addr := "ssh://" + host
+	addr := "ssh://" + util.URLHost(host)
 	if user != "" {
-		addr = "ssh://" + user + "@" + host
+		addr = "ssh://" + user + "@" + util.URLHost(host)
 	}
 	q := url.Values{}
 	if port != "" {

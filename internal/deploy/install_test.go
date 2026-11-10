@@ -100,6 +100,7 @@ func TestRemoteStoreURL(t *testing.T) {
 		{"root", "h", "", "", "ssh-ng://root@h"},
 		{"", "h", "2222", "", "ssh-ng://h?port=2222"},
 		{"root", "h", "2222", "/mnt", "ssh-ng://root@h?port=2222&remote-store=local%3Froot%3D%2Fmnt"},
+		{"root", "::1", "", "", "ssh-ng://root@[::1]"},
 	}
 	for _, tt := range tests {
 		if got := remoteStoreURL(tt.user, tt.host, tt.port, tt.root); got != tt.want {
@@ -317,6 +318,7 @@ func TestInstallStoreURL(t *testing.T) {
 		{name: "port", user: "root", host: "h", port: "2222", want: "ssh://root@h?port=2222"},
 		{name: "root store", user: "root", host: "h", root: "/mnt", want: "ssh://root@h?remote-store=local%3Froot%3D%2Fmnt"},
 		{name: "root store with port", user: "root", host: "h", port: "22", root: "/mnt", want: "ssh://root@h?port=22&remote-store=local%3Froot%3D%2Fmnt"},
+		{name: "ipv6", user: "root", host: "fe80::1", port: "22", root: "/mnt", want: "ssh://root@[fe80::1]?port=22&remote-store=local%3Froot%3D%2Fmnt"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

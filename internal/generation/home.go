@@ -88,7 +88,7 @@ func (HomeSystem) DeleteGenerations(h exec.Host, gens []Generation) error {
 func (HomeSystem) CollectGarbage(ctx context.Context, h exec.Host) error {
 	// Home generations are user-owned; no elevation is required locally or
 	// remotely. The gc runs against the host's own store.
-	return runGC(ctx, h, "nix", "store", "gc", "-v")
+	return runGC(ctx, h, nixGCArgs[0], nixGCArgs[1:]...)
 }
 
 func (HomeSystem) Rollback(ctx context.Context, h exec.Host, gen Generation) error {

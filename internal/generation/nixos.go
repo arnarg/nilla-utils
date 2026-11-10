@@ -155,9 +155,9 @@ func (NixOSSystem) Rollback(ctx context.Context, h exec.Host, gen Generation) er
 func (NixOSSystem) CollectGarbage(ctx context.Context, h exec.Host) error {
 	// Local cleanup already elevated to root; remote gc must run under sudo.
 	if h.IsLocal() {
-		return runGC(ctx, h, "nix", "store", "gc", "-v")
+		return runGC(ctx, h, nixGCArgs[0], nixGCArgs[1:]...)
 	}
-	return runGC(ctx, h, "sudo", "nix", "store", "gc", "-v")
+	return runGC(ctx, h, "sudo", nixGCArgs...)
 }
 
 func buildNixOSGeneration(h exec.Host, root string, e exec.EntryInfo) (Generation, error) {
@@ -197,6 +197,10 @@ func readKernelVersion(h exec.Host, system string) (string, error) {
 	}
 	return "Unknown", nil
 }
+
+// nixGCArgs runs nix store gc. nix-command is enabled explicitly since it is
+// off by default, e.g. on a freshly installed target.
+var nixGCArgs = []string{"nix", "--extra-experimental-features", "nix-command", "store", "gc", "-v"}
 
 func runGC(ctx context.Context, h exec.Host, name string, args ...string) error {
 	c, err := h.CommandContext(ctx, name, args...)

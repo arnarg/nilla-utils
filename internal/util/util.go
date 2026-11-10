@@ -179,21 +179,38 @@ func levelStyle(level log.Level, clr color.Color) lipgloss.Style {
 }
 
 // ParseTarget parses a target string in the format "user@host:port", "user@host", "host:port", or "host"
-// and returns the user, hostname, and port. If no user is specified, it returns an empty string for user.
-// If no port is specified, it returns an empty string for port.
+// and returns the user, hostname, and port. IPv6 addresses are written in
+// brackets, "[addr]" or "user@[addr]:port", and returned without them. If no
+// user is specified, it returns an empty string for user. If no port is
+// specified, it returns an empty string for port.
 func ParseTarget(target string) (user, hostname, port string) {
-	parts := strings.Split(target, "@")
-	if len(parts) == 2 {
-		user = parts[0]
-		hostname = parts[1]
-	} else {
-		hostname = parts[0]
+	hostname = target
+	if u, h, ok := strings.Cut(target, "@"); ok {
+		user, hostname = u, h
 	}
+
+	if strings.HasPrefix(hostname, "[") {
+		if end := strings.Index(hostname, "]"); end > 0 {
+			port = strings.TrimPrefix(hostname[end+1:], ":")
+			hostname = hostname[1:end]
+			return
+		}
+	}
+
 	if host, portStr, hasPort := strings.Cut(hostname, ":"); hasPort {
 		hostname = host
 		port = portStr
 	}
 	return
+}
+
+// URLHost returns hostname as written in the authority of a URL: IPv6
+// addresses are put in brackets. Nix strips them again before running ssh.
+func URLHost(hostname string) string {
+	if strings.Contains(hostname, ":") {
+		return "[" + hostname + "]"
+	}
+	return hostname
 }
 
 // BuildStoreAddress constructs an ssh-ng:// store address from user and hostname.
@@ -202,9 +219,9 @@ func ParseTarget(target string) (user, hostname, port string) {
 // If port is non-empty, it is appended as a ?port= query parameter (supported by both Nix
 // and Lix, unlike the host:port authority syntax which requires Nix >= 2.31).
 func BuildStoreAddress(user, hostname, port string) string {
-	addr := "ssh-ng://" + hostname
+	addr := "ssh-ng://" + URLHost(hostname)
 	if user != "" {
-		addr = fmt.Sprintf("ssh-ng://%s@%s", user, hostname)
+		addr = fmt.Sprintf("ssh-ng://%s@%s", user, URLHost(hostname))
 	}
 	if port != "" {
 		addr += "?port=" + port

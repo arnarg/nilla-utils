@@ -3,6 +3,10 @@ package deploy
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/arnarg/nilla-utils/internal/exec"
@@ -148,5 +152,60 @@ func TestSession_DiffSkipsWithoutCurrentGeneration(t *testing.T) {
 	// outPath is never read: Diff returns before comparing generations.
 	if err := s.Diff(context.Background(), "/nix/store/abc123-home-manager-generation"); err != nil {
 		t.Fatalf("expected diff to be skipped without error, got: %v", err)
+	}
+}
+
+// runBuildWithStubNix runs a build session against a stub nix that prints
+// outPath, and returns what the session wrote to stdout.
+func runBuildWithStubNix(t *testing.T, printOutPaths bool) string {
+	t.Helper()
+	const outPath = "/nix/store/abc123-nixos-system-host"
+
+	bin := t.TempDir()
+	stub := fmt.Sprintf("#!/bin/sh\necho %s\n", outPath)
+	if err := os.WriteFile(filepath.Join(bin, "nix"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	s := &Session{
+		Plan: &Plan{
+			Source:        testSource(),
+			Attr:          "systems.nixos.host",
+			SubCmd:        Build,
+			Raw:           true,
+			NoDiff:        true,
+			PrintOutPaths: printOutPaths,
+		},
+		local: exec.NewLocalExecutor(),
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout := os.Stdout
+	os.Stdout = w
+	runErr := s.Run(context.Background())
+	os.Stdout = stdout
+	w.Close()
+	out, _ := io.ReadAll(r)
+
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+	return string(out)
+}
+
+func TestSession_RunPrintsOutPaths(t *testing.T) {
+	got := runBuildWithStubNix(t, true)
+	if want := "/nix/store/abc123-nixos-system-host\n"; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestSession_RunPrintsNothingByDefault(t *testing.T) {
+	if got := runBuildWithStubNix(t, false); strings.TrimSpace(got) != "" {
+		t.Errorf("stdout = %q, want nothing", got)
 	}
 }

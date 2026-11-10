@@ -352,7 +352,7 @@ func TestNixOSSystem_CollectGarbage(t *testing.T) {
 		if err := (NixOSSystem{}).CollectGarbage(context.Background(), h); err != nil {
 			t.Fatalf("CollectGarbage: %v", err)
 		}
-		if !slices.Contains(h.ranCmds, "nix store gc -v") {
+		if !slices.Contains(h.ranCmds, "nix --extra-experimental-features nix-command store gc -v") {
 			t.Errorf("expected local nix store gc, got %v", h.ranCmds)
 		}
 	})
@@ -361,7 +361,7 @@ func TestNixOSSystem_CollectGarbage(t *testing.T) {
 		if err := (NixOSSystem{}).CollectGarbage(context.Background(), h); err != nil {
 			t.Fatalf("CollectGarbage: %v", err)
 		}
-		if !slices.Contains(h.ranCmds, "sudo nix store gc -v") {
+		if !slices.Contains(h.ranCmds, "sudo nix --extra-experimental-features nix-command store gc -v") {
 			t.Errorf("expected remote sudo nix store gc, got %v", h.ranCmds)
 		}
 	})

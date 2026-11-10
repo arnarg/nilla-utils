@@ -52,7 +52,7 @@ func (DarwinSystem) DeleteGenerations(h exec.Host, gens []Generation) error {
 // CollectGarbage runs nix store gc through a shell with DarwinPathExport, as
 // nix is often not on PATH under sudo on macOS.
 func (DarwinSystem) CollectGarbage(ctx context.Context, h exec.Host) error {
-	args := darwinShellArgs(h, fmt.Sprintf("%s; exec nix store gc -v", DarwinPathExport))
+	args := darwinShellArgs(h, fmt.Sprintf("%s; exec %s", DarwinPathExport, strings.Join(nixGCArgs, " ")))
 	return runGC(ctx, h, args[0], args[1:]...)
 }
 

@@ -73,9 +73,9 @@ func buildSSHURL(target, port string) string {
 // none is added, so ssh applies the User from ssh_config just as it did for
 // nilla's own connection (whose control socket nix must find).
 func buildSSHURLFromParts(user, hostname, port string) string {
-	addr := "ssh://" + hostname
+	addr := "ssh://" + util.URLHost(hostname)
 	if user != "" {
-		addr = fmt.Sprintf("ssh://%s@%s", user, hostname)
+		addr = fmt.Sprintf("ssh://%s@%s", user, util.URLHost(hostname))
 	}
 	if port != "" {
 		addr += "?port=" + port
@@ -206,6 +206,11 @@ func (s *Session) Run(ctx context.Context) error {
 	outPath, err := s.Build(ctx)
 	if err != nil {
 		return err
+	}
+
+	// Progress and the diff go to stderr, so stdout holds only the path.
+	if s.Plan.SubCmd == Build && s.Plan.PrintOutPaths {
+		fmt.Println(outPath)
 	}
 
 	if err := s.Diff(ctx, outPath); err != nil {
