@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -298,5 +299,31 @@ func TestPipeline_StopWaitsForPrints(t *testing.T) {
 		t.Fatalf("did not quit after printing: %v", msgs)
 	} else if _, ok := msgs[0].(tea.QuitMsg); !ok {
 		t.Fatalf("did not quit after printing: %T", msgs[0])
+	}
+}
+
+func TestPipeline_ConfirmIsUntimed(t *testing.T) {
+	m := newTestPipelineModel(nil)
+	reply, _ := confirm(m, nil)
+	m.Update(pipelineTick(m.stages[1].started.Add(5 * time.Second)))
+	if v := view(m); strings.Contains(v, "5.0s") {
+		t.Errorf("confirm shows elapsed time:\n%s", v)
+	}
+	if v := view(m); !strings.Contains(v, "? Confirm") {
+		t.Errorf("confirm lacks the static marker:\n%s", v)
+	}
+
+	m.Update(key("y"))
+	<-reply
+	line := stripANSI(strings.Join(m.printQueue, "\n"))
+	if !strings.Contains(line, "✓ Confirm  continuing") || strings.HasSuffix(strings.TrimSpace(line), "s") {
+		t.Errorf("confirm line = %q, want no elapsed time", line)
+	}
+
+	// Other stages are still timed.
+	m.Update(stageBeginMsg{id: 3})
+	m.Update(pipelineTick(m.stages[2].started.Add(5 * time.Second)))
+	if v := view(m); !strings.Contains(v, "5.0s") {
+		t.Errorf("copy stage lacks elapsed time:\n%s", v)
 	}
 }

@@ -273,6 +273,10 @@ type stageEntry struct {
 
 	sub stageModel
 
+	// untimed hides the elapsed time, for stages that wait on the user
+	// where a running clock would only add pressure.
+	untimed bool
+
 	// Set while the stage asks for confirmation.
 	confirm *confirmState
 }
@@ -339,6 +343,7 @@ var (
 	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	titleStyle   = lipgloss.NewStyle().Bold(true)
 	warningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	promptStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
 )
 
 type pipelineModel struct {
@@ -630,6 +635,7 @@ func (m *pipelineModel) startConfirm(msg confirmMsg) (tea.Model, tea.Cmd) {
 	}
 	s.state = stateRunning
 	s.started = time.Now()
+	s.untimed = true
 	s.confirm = &confirmState{prompt: msg.prompt, report: msg.report, reply: msg.reply}
 	if msg.report != nil {
 		b := newDiffBrowser(*msg.report)
@@ -699,7 +705,9 @@ func (m *pipelineModel) finishLine(s *stageEntry, result stageResult, text strin
 		if text != "" {
 			line += "  " + text
 		}
-		line += "  " + mutedStyle.Render(formatElapsed(time.Since(s.started)))
+		if !s.untimed {
+			line += "  " + mutedStyle.Render(formatElapsed(time.Since(s.started)))
+		}
 	case resultSkipped:
 		line = mutedStyle.Render("– " + s.Title)
 		if text != "" {
@@ -746,10 +754,16 @@ func (m *pipelineModel) View() tea.View {
 
 		case stateRunning:
 			elapsed := ""
-			if !now.IsZero() && now.After(s.started) {
+			if !s.untimed && !now.IsZero() && now.After(s.started) {
 				elapsed = "  " + mutedStyle.Render(formatElapsed(now.Sub(s.started)))
 			}
-			fmt.Fprintf(&b, "%s%s%s\n", m.spinner.View(), titleStyle.Render(s.Title), elapsed)
+			// A stage waiting on the user isn't working, so it gets a
+			// static marker instead of a spinner.
+			marker := m.spinner.View()
+			if s.confirm != nil {
+				marker = promptStyle.Render("?") + " "
+			}
+			fmt.Fprintf(&b, "%s%s%s\n", marker, titleStyle.Render(s.Title), elapsed)
 
 			switch {
 			case s.confirm != nil:
